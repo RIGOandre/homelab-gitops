@@ -57,7 +57,7 @@ spec:
               O sistema de arquivos {{ $labels.mountpoint }} ({{ $labels.device }}) está com
               {{ $value | humanizePercentage }} livre e, mantida a taxa de consumo das últimas
               6 horas, chega a zero dentro de 24 horas. Ainda dá pra resolver acordado.
-            runbook_url: https://github.com/RIGOandre/Homelab_GitOps/blob/main/docs/runbooks/disco-cheio.md
+            runbook_url: https://github.com/RIGOandre/homelab-gitops/blob/main/docs/runbooks/disco-cheio.md
 
         # Aqui o limiar fixo volta a fazer sentido, e é por isso que os dois alertas
         # coexistem: abaixo de 10% livre não importa mais a inclinação, porque o
@@ -78,7 +78,7 @@ spec:
               {{ $labels.mountpoint }} está com {{ $value | humanizePercentage }} livre. Nesse
               patamar o kubelet passa a despejar pod por pressão de disco e o Prometheus para
               de gravar. Liberar espaço agora.
-            runbook_url: https://github.com/RIGOandre/Homelab_GitOps/blob/main/docs/runbooks/disco-cheio.md
+            runbook_url: https://github.com/RIGOandre/homelab-gitops/blob/main/docs/runbooks/disco-cheio.md
 
         # Este alerta cobre o caso em que o nó está NotReady mas o kubelet ainda
         # reporta condição — kubelet travado, containerd morto, disco em read-only.
@@ -100,7 +100,7 @@ spec:
               O nó {{ $labels.node }} está NotReady há mais de 5 minutos. Como o cluster tem um
               nó só, tudo que roda aqui está parado ou vai parar. Os demais alertas estão
               inibidos de propósito enquanto este estiver ativo.
-            runbook_url: https://github.com/RIGOandre/Homelab_GitOps/blob/main/docs/runbooks/no-notready.md
+            runbook_url: https://github.com/RIGOandre/homelab-gitops/blob/main/docs/runbooks/no-notready.md
 
         # MemAvailable e não MemFree. Num nó com page cache quente o MemFree vive
         # perto de zero e isso é o kernel fazendo o trabalho dele; alertar em MemFree
@@ -120,7 +120,7 @@ spec:
             description: >-
               {{ $value | printf "%.1f" }}% da memória do nó está comprometida (MemAvailable).
               O próximo pod a crescer é candidato a OOM kill, e quem escolhe não sou eu.
-            runbook_url: https://github.com/RIGOandre/Homelab_GitOps/blob/main/docs/runbooks/saturacao-do-no.md
+            runbook_url: https://github.com/RIGOandre/homelab-gitops/blob/main/docs/runbooks/saturacao-do-no.md
 
         # Sem espera: o OOM kill já aconteceu, o `for` curto só existe pra sobreviver
         # a um scrape perdido. Este é o alerta que explica retroativamente metade dos
@@ -136,7 +136,7 @@ spec:
             description: >-
               O kernel executou {{ $value | printf "%.0f" }} OOM kill(s) nos últimos 10 minutos.
               Descobrir qual container estourou o limit antes de aumentar o limit de todo mundo.
-            runbook_url: https://github.com/RIGOandre/Homelab_GitOps/blob/main/docs/runbooks/saturacao-do-no.md
+            runbook_url: https://github.com/RIGOandre/homelab-gitops/blob/main/docs/runbooks/saturacao-do-no.md
 
         # 90% por 20 minutos, não 80% por 5: num nó só, build de imagem e sync do
         # Argo CD encostam em 100% o tempo todo e isso é o nó fazendo o trabalho dele.
@@ -157,7 +157,7 @@ spec:
             description: >-
               CPU em {{ $value | printf "%.1f" }}% de uso há 20 minutos. Não é pico de build:
               é platô. Ver quem está consumindo antes que a latência apareça no produto.
-            runbook_url: https://github.com/RIGOandre/Homelab_GitOps/blob/main/docs/runbooks/saturacao-do-no.md
+            runbook_url: https://github.com/RIGOandre/homelab-gitops/blob/main/docs/runbooks/saturacao-do-no.md
 ---
 apiVersion: monitoring.coreos.com/v1
 kind: PrometheusRule
@@ -200,7 +200,7 @@ spec:
               O container {{ $labels.container }} do pod {{ $labels.namespace }}/{{ $labels.pod }}
               está em CrashLoopBackOff há mais de 15 minutos. Se houve OOM kill no nó no mesmo
               intervalo, a causa provavelmente é limit de memória, não o código.
-            runbook_url: https://github.com/RIGOandre/Homelab_GitOps/blob/main/docs/runbooks/crashloop.md
+            runbook_url: https://github.com/RIGOandre/homelab-gitops/blob/main/docs/runbooks/crashloop.md
 
     - name: homelab.certificados
       interval: 5m
@@ -228,7 +228,7 @@ spec:
               O certificado {{ $labels.name }} (issuer {{ $labels.issuer_name }}) vence em
               {{ $value | humanizeDuration }}. O cert-manager já deveria ter renovado; se não
               renovou, a renovação está falhando em silêncio.
-            runbook_url: https://github.com/RIGOandre/Homelab_GitOps/blob/main/docs/runbooks/certificado-expirando.md
+            runbook_url: https://github.com/RIGOandre/homelab-gitops/blob/main/docs/runbooks/certificado-expirando.md
 
         # Este é o incidente de verdade; o de cima é o sintoma com prazo. Certificate
         # fora de Ready por 2h significa desafio ACME travado, DNS errado ou rate
@@ -245,7 +245,7 @@ spec:
               O Certificate {{ $labels.name }} está fora de Ready há mais de 2 horas. Enquanto
               isso o certificado atual continua servindo, então há prazo — mas o relógio já
               está correndo contra a data de expiração.
-            runbook_url: https://github.com/RIGOandre/Homelab_GitOps/blob/main/docs/runbooks/certificado-expirando.md
+            runbook_url: https://github.com/RIGOandre/homelab-gitops/blob/main/docs/runbooks/certificado-expirando.md
 
     - name: homelab.argocd
       interval: 1m
@@ -270,7 +270,7 @@ spec:
               A Application {{ $labels.name }} (projeto {{ $labels.project }}) está OutOfSync há
               mais de 30 minutos. O estado do cluster deixou de ser o que está no Git, que é a
               única premissa em que este repositório se apoia.
-            runbook_url: https://github.com/RIGOandre/Homelab_GitOps/blob/main/docs/runbooks/argocd-degradado.md
+            runbook_url: https://github.com/RIGOandre/homelab-gitops/blob/main/docs/runbooks/argocd-degradado.md
 
         # Degraded e Missing juntos: Degraded é o recurso existindo e falhando,
         # Missing é ele não existir. Unknown fica de fora porque acontece durante
@@ -289,7 +289,7 @@ spec:
               A Application {{ $labels.name }} está {{ $labels.health_status }} há mais de 15
               minutos no namespace {{ $labels.dest_namespace }}. Isso é carga fora do ar ou
               recurso que nunca subiu, não drift de configuração.
-            runbook_url: https://github.com/RIGOandre/Homelab_GitOps/blob/main/docs/runbooks/argocd-degradado.md
+            runbook_url: https://github.com/RIGOandre/homelab-gitops/blob/main/docs/runbooks/argocd-degradado.md
 
         # Sync isolado que falha e o retry conserta é rotina. Três em meia hora é o
         # Argo CD batendo a cabeça no mesmo manifesto — CRD faltando, permissão,
@@ -308,7 +308,7 @@ spec:
               {{ $value | printf "%.0f" }} sincronizações da Application {{ $labels.name }}
               falharam nos últimos 30 minutos. Retry não vai resolver: ler o erro da última
               operação antes de sincronizar de novo à mão.
-            runbook_url: https://github.com/RIGOandre/Homelab_GitOps/blob/main/docs/runbooks/argocd-degradado.md
+            runbook_url: https://github.com/RIGOandre/homelab-gitops/blob/main/docs/runbooks/argocd-degradado.md
 ---
 apiVersion: monitoring.coreos.com/v1
 kind: PrometheusRule
@@ -355,7 +355,7 @@ spec:
               O ambiente de preview do PR #{{ $labels.pull_request }} em {{ $labels.repository }}
               (namespace {{ $labels.namespace }}) expira em {{ $value | humanizeDuration }}.
               Se ainda há revisão em andamento, estender o prazo antes que ele suma.
-            runbook_url: https://github.com/RIGOandre/Homelab_GitOps/blob/main/docs/runbooks/preview-expirando.md
+            runbook_url: https://github.com/RIGOandre/homelab-gitops/blob/main/docs/runbooks/preview-expirando.md
 
         # Alerta sobre o operator, não sobre o ambiente: se o prazo venceu há 15
         # minutos e a série continua existindo, o reconcile de coleta não rodou. Isso
@@ -373,7 +373,7 @@ spec:
               O ambiente do PR #{{ $labels.pull_request }} em {{ $labels.repository }} venceu há
               {{ $value | humanizeDuration }} e ainda aparece nas métricas. A coleta do
               preview-operator não está rodando; o namespace continua ocupando o nó.
-            runbook_url: https://github.com/RIGOandre/Homelab_GitOps/blob/main/docs/runbooks/preview-expirando.md
+            runbook_url: https://github.com/RIGOandre/homelab-gitops/blob/main/docs/runbooks/preview-expirando.md
 
         # Proporção e não contagem: um erro em dez reconciles é retry normal do
         # controller-runtime, dez erros em dez é o operator quebrado. Contagem
@@ -396,4 +396,4 @@ spec:
               {{ $value | humanizePercentage }} dos reconciles do preview-operator terminaram em
               erro nos últimos 10 minutos. Ambiente de PR novo provavelmente não está subindo,
               e o PR vai ficar sem preview sem ninguém avisar quem abriu.
-            runbook_url: https://github.com/RIGOandre/Homelab_GitOps/blob/main/docs/runbooks/preview-expirando.md
+            runbook_url: https://github.com/RIGOandre/homelab-gitops/blob/main/docs/runbooks/preview-expirando.md

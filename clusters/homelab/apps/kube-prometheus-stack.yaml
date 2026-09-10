@@ -25,7 +25,7 @@ spec:
         valueFiles:
           # Arquivo mantido junto dos demais manifests de observabilidade.
           - $valores/clusters/homelab/platform/observabilidade/kube-prometheus-stack.values.yaml
-    - repoURL: https://github.com/RIGOandre/Homelab_GitOps.git
+    - repoURL: https://github.com/RIGOandre/homelab-gitops.git
       targetRevision: main
       # Source só de referência: não sincroniza nada, serve de raiz para o
       # $valores usado acima.

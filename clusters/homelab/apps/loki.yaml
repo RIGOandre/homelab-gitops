@@ -22,7 +22,7 @@ spec:
           # armazenamento ficam no arquivo de values, junto do resto da
           # observabilidade.
           - $valores/clusters/homelab/platform/observabilidade/loki.values.yaml
-    - repoURL: https://github.com/RIGOandre/Homelab_GitOps.git
+    - repoURL: https://github.com/RIGOandre/homelab-gitops.git
       targetRevision: main
       ref: valores
   destination:

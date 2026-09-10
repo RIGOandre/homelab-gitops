@@ -24,7 +24,7 @@ spec:
           # values, não aqui: é texto longo demais para caber legível dentro de
           # um Application.
           - $valores/clusters/homelab/platform/observabilidade/alloy.values.yaml
-    - repoURL: https://github.com/RIGOandre/Homelab_GitOps.git
+    - repoURL: https://github.com/RIGOandre/homelab-gitops.git
       targetRevision: main
       ref: valores
   destination:

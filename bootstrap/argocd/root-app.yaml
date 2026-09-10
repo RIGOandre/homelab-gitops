@@ -29,7 +29,7 @@ metadata:
 spec:
   project: default
   source:
-    repoURL: https://github.com/RIGOandre/Homelab_GitOps.git
+    repoURL: https://github.com/RIGOandre/homelab-gitops.git
     targetRevision: main
     path: clusters/homelab/apps
     directory:
