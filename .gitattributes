@@ -1,0 +1,23 @@
+# Fim de linha normalizado para LF no repositório.
+#
+# Não é preciosismo: metade deste repositório é script que roda em Linux, e um
+# checkout no Windows com autocrlf ligado grava CRLF neles. O shebang vira
+# "#!/usr/bin/env bash\r" e o kernel responde "bad interpreter" — erro que não
+# diz nada sobre a causa.
+* text=auto eol=lf
+*.sh text eol=lf
+
+# O Linguist classifica YAML como dado e não o conta na barra de linguagens.
+# Num repositório GitOps o YAML É a substância: sem esta linha a barra mede a
+# ponte do ntfy e os scripts de hack/, ignora os manifests, e a página inicial
+# anuncia "Python" para um cluster Kubernetes.
+*.yaml linguist-detectable=true
+*.yml linguist-detectable=true
+
+# Gerados por hack/gerar-configmaps.py a partir do .json e do .py ao lado.
+# Ficam fora da conta e vêm colapsados no diff do pull request — editar um
+# deles à mão é erro, não revisão.
+*.configmap.yaml linguist-generated=true
+
+# Export do Grafana. É dado de painel, não código escrito à mão.
+clusters/homelab/platform/observabilidade/*.json linguist-generated=true
