@@ -1,0 +1,19 @@
+# Uma regra só, casando por sufixo de arquivo e não por diretório: quem decide se
+# um arquivo é cifrado é o nome dele. O sidecar do Argo CD usa exatamente o mesmo
+# glob (*.enc.yaml) para decidir o que decifrar. Se a regra fosse por diretório,
+# sops e Argo CD poderiam discordar sobre um arquivo e o erro só apareceria na
+# hora do sync, com o manifesto vazando em claro no log do repo-server.
+creation_rules:
+  - path_regex: \.enc\.yaml$
+
+    # encrypted_regex e não o arquivo inteiro: com só o data cifrado, o diff do PR
+    # ainda mostra qual secret mudou e em qual namespace. Cifrando tudo, todo
+    # commit vira uma parede de base64 e a revisão deixa de existir.
+    encrypted_regex: ^(data|stringData)$
+
+    # Chave pública do age. Só a pública entra no Git - ela cifra, não decifra.
+    # A privada correspondente vive em dois lugares, nenhum deles versionado:
+    #   - ~/.config/sops/age/keys.txt na estação do operador (modo 0600);
+    #   - Secret sops-age no namespace argocd, criado por bootstrap/instalar.sh.
+    # Ver docs/segredos.md para o ciclo completo e para o plano de rotação.
+    age: age1un5gdpclx456d92xufal3lgqfqda7fqm2dkp0u5egeff7gqgm9sswc7p64
