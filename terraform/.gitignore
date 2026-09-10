@@ -1,0 +1,19 @@
+# Segredo: os tokens chegam por TF_VAR_*, mas o tfvars real costuma acumular
+# valor que não deveria sair da máquina.
+terraform.tfvars
+*.auto.tfvars
+
+# State local. Guarda os dois tokens e o certificado de cliente do cluster em
+# texto claro; não existe versão deste arquivo que seja segura de versionar.
+terraform.tfstate
+terraform.tfstate.*
+*.tfstate.backup
+
+# Plano salvo. Contém os mesmos valores do state.
+*.tfplan
+
+.terraform/
+crash.log
+
+# .terraform.lock.hcl fica versionado de propósito: é ele que garante que a
+# outra máquina baixe exatamente o mesmo binário de provider, com a mesma soma.

@@ -1,0 +1,52 @@
+# Estado do Terraform. Contém, em claro, todo valor que passou por um recurso -
+# inclusive senha gerada e chave privada. É o arquivo mais sensível que este
+# projeto produz e ele nunca entra no Git.
+*.tfstate
+*.tfstate.*
+.terraform/
+crash.log
+crash.*.log
+
+# Arquivo de plano. Também guarda valor sensível, e ainda por cima fica velho
+# rápido: plano aplicado depois de o mundo mudar destrói recurso sem avisar.
+*.tfplan
+
+# Variáveis reais. O .example é versionado e é ele que documenta os campos.
+terraform.tfvars
+*.auto.tfvars
+!terraform.tfvars.example
+
+# O lock de providers NÃO está ignorado de propósito: ele é o que faz o CI e a
+# estação usarem a mesma versão de provider. Sem ele, "funciona aqui" vira
+# argumento válido.
+
+# Acesso ao cluster. O k3s.yaml traz o certificado de cliente do admin dentro:
+# quem tem o arquivo é admin do cluster, sem senha nenhuma.
+kubeconfig
+kubeconfig.*
+*.kubeconfig
+k3s.yaml
+.kube/
+
+# Chave privada age. Sem ela nenhum .enc.yaml decifra; com ela, todos decifram.
+# Vive em ~/.config/sops/age/keys.txt, fora do repositório. Ver docs/segredos.md.
+keys.txt
+*.agekey
+*.age.key
+age-key*.txt
+
+# Segredo decifrado que escapou para o disco. `make decifrar` só escreve na tela
+# justamente para não criar nenhum destes, mas redirecionar a saída é fácil
+# demais.
+*.dec.yaml
+*.decrypted.yaml
+*.plain.yaml
+
+# Ambiente e sobras de editor
+.env
+.env.*
+.venv/
+__pycache__/
+*.py[co]
+.DS_Store
+*.swp

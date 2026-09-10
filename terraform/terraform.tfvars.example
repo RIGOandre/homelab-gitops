@@ -1,0 +1,56 @@
+# Copie para terraform.tfvars e ajuste. terraform.tfvars está no .gitignore.
+#
+# Os dois tokens não ficam aqui. Arquivo de tfvars com segredo dentro é o jeito
+# mais comum de vazar credencial em repositório de infraestrutura: basta um
+# `git add -A` distraído. Exporte no ambiente, de preferência a partir de um
+# gerenciador de senha:
+#
+#   export TF_VAR_hcloud_token="$(pass hetzner/homelab)"
+#   export TF_VAR_cloudflare_api_token="$(pass cloudflare/dns-homelab)"
+#
+# Escopo dos tokens: o da Hetzner precisa de leitura e escrita no projeto; o da
+# Cloudflare precisa só de Zone:Read e DNS:Edit na zona do domínio abaixo. Nada
+# de Global API Key.
+
+# Domínio raiz. A zona já precisa existir na conta da Cloudflare.
+dominio = "exemplo.com.br"
+
+# Chave pública inteira, a linha do arquivo .pub. Não a privada.
+chave_ssh_publica = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIExemploExemploExemploExemploExemploExe andre@notebook"
+
+# Quem alcança a porta 22. Máscara obrigatória: 189.0.0.1 sem /32 é recusado.
+# Se o IP de casa é dinâmico, aponte para a faixa de saída da VPN em vez de
+# afrouxar a lista.
+ips_ssh_liberados = [
+  "203.0.113.42/32",
+]
+
+# ---------------------------------------------------------------------------
+# Daqui para baixo tudo tem padrão. Descomente só o que for mudar.
+# ---------------------------------------------------------------------------
+
+# nome_servidor = "k3s-homelab"
+
+# cax21: 4 vCPU ARM e 8 GB. Tipos com 4 GB ou menos são recusados na validação
+# porque o conjunto k3s + Argo CD + ingress-nginx + cert-manager não cabe.
+# tipo_servidor = "cax21"
+
+# Datacenter, não localização. O IP primário nasce preso a um datacenter e o
+# servidor tem que nascer no mesmo.
+# datacenter = "nbg1-dc3"
+
+# imagem = "ubuntu-24.04"
+
+# Versão exata do k3s. Trocar aqui recria o servidor.
+# versao_k3s = "v1.31.5+k3s1"
+
+# usuario_admin = "andre"
+
+# Backup da Hetzner custa 20% do preço do servidor e só cobre o disco.
+# ativar_backups = false
+
+# ttl_dns = 300
+
+# Proxy da Cloudflare desligado: com ele ligado o TLS termina na Cloudflare e o
+# certificado que o cert-manager emite deixa de ser o que o navegador enxerga.
+# proxy_cloudflare = false
