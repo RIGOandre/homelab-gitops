@@ -1,0 +1,49 @@
+# O Argo CD gerenciando a si mesmo.
+#
+# A fonte é o próprio repositório do projeto em manifests/cluster-install, que é
+# exatamente a kustomization de onde sai o install.yaml usado no bootstrap. Usar
+# a mesma origem e a mesma tag evita a divergência clássica: instalar por um
+# caminho e atualizar por outro, com defaults diferentes entre chart e manifest.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: argocd
+  namespace: argocd
+  annotations:
+    # Wave 0: o gerenciador entra antes dos gerenciados. Se uma wave posterior
+    # derrubar o cluster, o Argo CD já está reconciliado e continua tocando as
+    # outras waves em vez de ficar num estado meio aplicado.
+    argocd.argoproj.io/sync-wave: "0"
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/argoproj/argo-cd.git
+    # Mesma versão do bootstrap/instalar.sh. As duas sobem juntas, sempre.
+    targetRevision: v2.13.3
+    path: manifests/cluster-install
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: argocd
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      # As CRDs do Argo CD estouram o limite da anotação de apply client-side.
+      - ServerSideApply=true
+  # Pendência conhecida: os manifests upstream não trazem o sidecar sops nem o
+  # init container que o docs/segredos.md descreve, e sem eles o Application
+  # platform-secrets não decifra os *.enc.yaml. Entrar por aqui significa trocar
+  # esta source por um overlay de kustomize no repositório, com o base remoto
+  # apontando para a mesma tag - o que também tira o proveito de instalar e
+  # atualizar pela mesma origem do bootstrap. A troca é consciente e ainda não
+  # foi feita; enquanto isso o Secret sops-age já é criado pelo instalar.sh.
+  ignoreDifferences:
+    # O application-controller escreve o próprio status; sem isso o Application
+    # do Argo CD vive OutOfSync por causa dele mesmo.
+    - group: argoproj.io
+      kind: Application
+      jsonPointers:
+        - /status

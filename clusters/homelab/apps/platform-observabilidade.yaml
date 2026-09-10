@@ -1,0 +1,47 @@
+# Os manifestos soltos da observabilidade: regras de alerta, rota do
+# Alertmanager, ServiceMonitor, a ponte do ntfy e o ConfigMap do dashboard.
+#
+# Sem este Application os arquivos de platform/observabilidade/ ficam no
+# repositório sem nunca chegar ao cluster. Os values de Helm daquela pasta são
+# consumidos por referência ($valores) pelos Application do kube-prometheus-stack,
+# do Loki e do Alloy — mas ninguém aplicaria as PrometheusRule, e o cluster
+# teria Prometheus instalado e alerta nenhum. É a diferença entre observado e
+# só instrumentado.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: platform-observabilidade
+  namespace: argocd
+  annotations:
+    # Wave 3, junto com platform-rede e platform-secrets: PrometheusRule e
+    # ServiceMonitor são CRDs que o kube-prometheus-stack instala na wave 1.
+    argocd.argoproj.io/sync-wave: "3"
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/RIGOandre/Homelab_GitOps.git
+    targetRevision: main
+    path: clusters/homelab/platform/observabilidade
+    directory:
+      recurse: false
+      # Values de Helm e o dashboard cru não são manifestos: não têm kind e o
+      # Argo CD recusaria o sync inteiro por causa deles. O dashboard entra
+      # pelo .configmap.yaml gerado ao lado, esse sim um objeto de verdade.
+      exclude: "{*.values.yaml,*.json}"
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: observabilidade
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+      # O apply client-side guarda uma cópia inteira do objeto na anotação
+      # last-applied-configuration. Para o ConfigMap do dashboard isso é
+      # gravar o mesmo JSON duas vezes no etcd, com teto de 256 KB para a soma
+      # das anotações — hoje o arquivo tem 20 KB e cabe, mas cada painel novo
+      # come dos dois lados de uma vez.
+      - ServerSideApply=true

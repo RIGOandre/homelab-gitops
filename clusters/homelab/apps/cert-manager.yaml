@@ -1,0 +1,46 @@
+# cert-manager: emissão e renovação automática dos certificados TLS do homelab.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: cert-manager
+  namespace: argocd
+  annotations:
+    # Wave 1: dono de CRD. ClusterIssuer e Certificate precisam existir como tipo
+    # antes de qualquer manifest da wave 3 que os referencie, senão o sync falha
+    # com "no matches for kind ClusterIssuer".
+    argocd.argoproj.io/sync-wave: "1"
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: default
+  source:
+    repoURL: https://charts.jetstack.io
+    chart: cert-manager
+    targetRevision: v1.16.2
+    helm:
+      values: |
+        # As CRDs entram pelo próprio chart. A alternativa (aplicar as CRDs por
+        # fora) deixaria a versão delas fora do Git e desalinhada do controller
+        # numa atualização.
+        installCRDs: true
+        # Nó único: réplica extra só concorreria pelo mesmo lease de liderança.
+        replicaCount: 1
+        prometheus:
+          enabled: true
+          serviceMonitor:
+            # kube-prometheus-stack está na mesma wave, então a CRD ServiceMonitor
+            # pode ainda não existir quando este sync roda. Fica desligado até que
+            # a coleta de métricas do cert-manager valha o acoplamento de ordem.
+            enabled: false
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: cert-manager
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+      # As CRDs do cert-manager são grandes o suficiente para o apply
+      # client-side reclamar do tamanho da anotação.
+      - ServerSideApply=true

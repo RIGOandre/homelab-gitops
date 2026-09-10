@@ -1,0 +1,40 @@
+# Emissor de teste do Let's Encrypt.
+#
+# Existe porque o ambiente de produção do ACME tem limite de 5 certificados
+# duplicados por semana e de 5 validações falhas por hora por conta: uma tarde
+# ajustando DNS, annotation de Ingress ou classe do solver queima a cota e deixa
+# o domínio sem poder emitir nada por dias. O staging tem limites folgados e
+# serve para acertar a configuração; o certificado que ele devolve é assinado por
+# uma raiz não confiável, então o navegador reclama - isso é esperado e é o sinal
+# de que o emissor ainda não foi trocado pelo de produção.
+#
+# Fluxo: validar aqui, e só depois apontar o Ingress para letsencrypt-producao.
+apiVersion: cert-manager.io/v1
+kind: ClusterIssuer
+metadata:
+  name: letsencrypt-staging
+spec:
+  acme:
+    server: https://acme-staging-v02.api.letsencrypt.org/directory
+    # Caixa real: é por aqui que o Let's Encrypt avisa de certificado prestes a
+    # vencer quando a renovação automática falha em silêncio. O domínio da zona
+    # é var.dominio no Terraform, mas aqui ele é literal: ao trocar de domínio,
+    # este endereço tem que ser trocado junto, senão o aviso vai para o vazio.
+    email: acme@rigo.dev.br
+    privateKeySecretRef:
+      # Chave da conta ACME. Se este Secret sumir, a conta é recriada do zero e
+      # o histórico de emissão junto - por isso o nome é fixo e separado do de
+      # produção, para uma limpeza no staging não levar a conta boa embora.
+      name: letsencrypt-staging-conta
+    solvers:
+      - http01:
+          ingress:
+            # HTTP-01 e não DNS-01: o Terraform já abre a porta 80 no firewall
+            # justamente para o desafio, e o registro curinga manda todo host
+            # para este nó. DNS-01 exigiria um token de escrita da Cloudflare
+            # guardado no cluster, e o único ganho seria certificado curinga -
+            # que este homelab não usa, porque cada host emite o seu.
+            #
+            # Vale lembrar: com o proxy da Cloudflare ligado (nuvem laranja) o
+            # desafio não chega até aqui. O Terraform mantém proxied = false.
+            ingressClassName: nginx

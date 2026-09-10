@@ -1,0 +1,33 @@
+# Manifests soltos de rede: os ClusterIssuer do Let's Encrypt e o que mais for
+# infraestrutura de borda. Sem chart no meio - é YAML puro versionado aqui.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: platform-rede
+  namespace: argocd
+  annotations:
+    # Wave 3: consome CRD do cert-manager (wave 1) e depende do ingress-nginx
+    # (wave 2) para o solver HTTP-01. Aplicar antes disso quebraria o sync no
+    # tipo inexistente ou deixaria certificado pendente em validação.
+    argocd.argoproj.io/sync-wave: "3"
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/RIGOandre/Homelab_GitOps.git
+    targetRevision: main
+    path: clusters/homelab/platform/rede
+    directory:
+      recurse: false
+      include: "*.yaml"
+  destination:
+    server: https://kubernetes.default.svc
+    # Os ClusterIssuer são cluster-scoped, mas o Application exige um namespace
+    # de destino para o que não for: cert-manager, onde os Secrets de conta ACME
+    # são gravados.
+    namespace: cert-manager
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true

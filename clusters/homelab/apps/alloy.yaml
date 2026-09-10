@@ -1,0 +1,38 @@
+# Grafana Alloy: agente de coleta que lê os logs dos contêineres do nó e empurra
+# para o Loki.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: alloy
+  namespace: argocd
+  annotations:
+    # Wave 5, a última: um agente sem destino só acumularia erro de push no
+    # próprio log e sujaria o primeiro sync com alarme falso. Subir depois do
+    # Loki faz a primeira remessa já encontrar o endpoint de pé.
+    argocd.argoproj.io/sync-wave: "5"
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: default
+  sources:
+    - repoURL: https://grafana.github.io/helm-charts
+      chart: alloy
+      targetRevision: 0.10.1
+      helm:
+        valueFiles:
+          # A pipeline de coleta (o bloco de configuração do Alloy) vive no
+          # values, não aqui: é texto longo demais para caber legível dentro de
+          # um Application.
+          - $valores/clusters/homelab/platform/observabilidade/alloy.values.yaml
+    - repoURL: https://github.com/RIGOandre/Homelab_GitOps.git
+      targetRevision: main
+      ref: valores
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: observabilidade
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true

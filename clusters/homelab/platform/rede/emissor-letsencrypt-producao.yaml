@@ -1,0 +1,23 @@
+# Emissor de produção do Let's Encrypt: certificados confiáveis pelo navegador.
+#
+# Só entra em uso depois que a mesma configuração já emitiu com sucesso pelo
+# letsencrypt-staging. O limite de 50 certificados por semana por domínio
+# registrado é global e não pode ser resetado; um loop de reconciliação errado
+# consome a cota em minutos e deixa o domínio inteiro sem emissão até a janela
+# deslizante liberar.
+apiVersion: cert-manager.io/v1
+kind: ClusterIssuer
+metadata:
+  name: letsencrypt-producao
+spec:
+  acme:
+    server: https://acme-v02.api.letsencrypt.org/directory
+    email: acme@rigo.dev.br
+    privateKeySecretRef:
+      name: letsencrypt-producao-conta
+    solvers:
+      # Mesmo solver do staging de propósito: se a validação passa lá e falha
+      # aqui, a diferença é do lado do Let's Encrypt, não da configuração.
+      - http01:
+          ingress:
+            ingressClassName: nginx

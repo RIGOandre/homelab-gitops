@@ -1,0 +1,59 @@
+# Único ponto de entrada HTTP/HTTPS do cluster.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: ingress-nginx
+  namespace: argocd
+  annotations:
+    # Wave 2: depois dos donos de CRD (já pode declarar ServiceMonitor) e antes
+    # dos ClusterIssuer da wave 3, porque o desafio HTTP-01 do Let's Encrypt é
+    # resolvido por um Ingress - sem controller de pé, a validação falha e o
+    # cert-manager entra em backoff longo.
+    argocd.argoproj.io/sync-wave: "2"
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: default
+  source:
+    repoURL: https://kubernetes.github.io/ingress-nginx
+    chart: ingress-nginx
+    targetRevision: 4.11.3
+    helm:
+      # Values inline e não arquivo separado: são poucas linhas e todas existem
+      # por causa de uma decisão do provisionamento (nó único, sem servicelb).
+      # Ler o Application já explica o desenho inteiro da borda.
+      values: |
+        controller:
+          # DaemonSet com hostPort porque o k3s sobe com --disable=servicelb: não
+          # há controlador para atender Service do tipo LoadBalancer, e um Service
+          # assim ficaria com EXTERNAL-IP <pending> para sempre, sem erro nenhum.
+          # As portas 80 e 443 do nó são as que o firewall do Terraform abre e as
+          # que o registro curinga da Cloudflare aponta.
+          kind: DaemonSet
+          hostPort:
+            enabled: true
+          service:
+            # ClusterIP porque o tráfego externo não passa por aqui - entra pelo
+            # hostPort. O Service continua servindo para o Prometheus raspar e
+            # para chamadas de dentro do cluster.
+            type: ClusterIP
+          config:
+            # O Terraform mantém proxy_cloudflare = false, então a conexão chega
+            # direta do cliente. Confiar em X-Forwarded-For nesse cenário deixa
+            # qualquer um forjar o próprio IP no log de acesso e no rate limit.
+            # Ligar isto no mesmo commit que ligar a nuvem laranja, nunca antes.
+            use-forwarded-headers: "false"
+          metrics:
+            enabled: true
+            serviceMonitor:
+              # Seguro aqui: o Prometheus Operator entrou na wave 1.
+              enabled: true
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: ingress-nginx
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true

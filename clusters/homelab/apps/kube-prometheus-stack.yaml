@@ -1,0 +1,61 @@
+# Prometheus, Alertmanager, Grafana e o Prometheus Operator num pacote só.
+#
+# Duas sources: o chart vem do repositório do prometheus-community e o arquivo de
+# values vem deste repositório (ref $valores). É o que permite revisar mudança de
+# configuração em pull request sem precisar de um fork do chart.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: kube-prometheus-stack
+  namespace: argocd
+  annotations:
+    # Wave 1: dono das CRDs ServiceMonitor, PodMonitor e PrometheusRule. Subindo
+    # aqui, todo componente das waves seguintes pode declarar o próprio
+    # ServiceMonitor sem precisar de um segundo sync para ser coletado.
+    argocd.argoproj.io/sync-wave: "1"
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: default
+  sources:
+    - repoURL: https://prometheus-community.github.io/helm-charts
+      chart: kube-prometheus-stack
+      targetRevision: 65.1.1
+      helm:
+        valueFiles:
+          # Arquivo mantido junto dos demais manifests de observabilidade.
+          - $valores/clusters/homelab/platform/observabilidade/kube-prometheus-stack.values.yaml
+    - repoURL: https://github.com/RIGOandre/Homelab_GitOps.git
+      targetRevision: main
+      # Source só de referência: não sincroniza nada, serve de raiz para o
+      # $valores usado acima.
+      ref: valores
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: observabilidade
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      # A CRD do Prometheus passa de 1 MB e não cabe na anotação
+      # last-applied-configuration do apply client-side: sem server-side apply o
+      # sync morre em "metadata.annotations: Too long" e a stack nunca instala.
+      - ServerSideApply=true
+      - CreateNamespace=true
+      # O chart cria PrometheusRule e ServiceMonitor na mesma leva em que
+      # instala as CRDs deles: sem isto o dry-run do Argo CD falha para os tipos
+      # que ainda não existem no api-server e a primeira instalação nunca passa.
+      - SkipDryRunOnMissingResource=true
+  ignoreDifferences:
+    # O próprio operator injeta o caBundle nos webhooks depois do apply. Sem
+    # ignorar, o Application fica OutOfSync para sempre por causa de um campo
+    # que o Git nunca vai conhecer.
+    - group: admissionregistration.k8s.io
+      kind: ValidatingWebhookConfiguration
+      jqPathExpressions:
+        - .webhooks[]?.clientConfig.caBundle
+    - group: admissionregistration.k8s.io
+      kind: MutatingWebhookConfiguration
+      jqPathExpressions:
+        - .webhooks[]?.clientConfig.caBundle

@@ -1,0 +1,36 @@
+# Loki: armazenamento dos logs coletados pelo Alloy.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: loki
+  namespace: argocd
+  annotations:
+    # Wave 4: precisa do Prometheus Operator (wave 1) para o próprio
+    # ServiceMonitor e é o destino que o Alloy (wave 5) procura ao subir.
+    argocd.argoproj.io/sync-wave: "4"
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: default
+  sources:
+    - repoURL: https://grafana.github.io/helm-charts
+      chart: loki
+      targetRevision: 6.24.0
+      helm:
+        valueFiles:
+          # O modo de deploy (monolítico x microserviços) e o backend de
+          # armazenamento ficam no arquivo de values, junto do resto da
+          # observabilidade.
+          - $valores/clusters/homelab/platform/observabilidade/loki.values.yaml
+    - repoURL: https://github.com/RIGOandre/Homelab_GitOps.git
+      targetRevision: main
+      ref: valores
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: observabilidade
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
