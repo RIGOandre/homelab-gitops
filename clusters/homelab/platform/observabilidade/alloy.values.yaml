@@ -1,0 +1,164 @@
+# Grafana Alloy — coleta de log de pod, DaemonSet.
+#
+# Lê arquivo em /var/log/pods em vez de pedir log ao apiserver. Dois motivos: não
+# adiciona carga no apiserver de um nó que também roda os produtos, e continua
+# funcionando quando o apiserver está com problema — que é precisamente a hora em que
+# eu quero o log.
+
+controller:
+  type: daemonset
+
+rbac:
+  create: true
+
+serviceAccount:
+  create: true
+
+serviceMonitor:
+  enabled: true
+
+alloy:
+  # /var/log/pods contém symlink; em k3s o alvo do link está em
+  # /var/lib/rancher/k3s/agent/containerd/... e não em /var/log. Montar só varlog dá
+  # um DaemonSet que sobe saudável, descobre todos os targets e não lê uma linha:
+  # o symlink aponta pra fora do container. Os dois volumes são obrigatórios aqui.
+  mounts:
+    varlog: true
+    dockercontainers: false
+    extra:
+      - name: k3s-containerd
+        mountPath: /var/lib/rancher/k3s/agent/containerd
+        readOnly: true
+
+  # Log de container pertence a root com 0644 pro dono. Sem isto o Alloy lê parte dos
+  # containers e cala sobre a outra parte, que é pior que não coletar nada — dá a
+  # impressão de que o serviço simplesmente não logou.
+  securityContext:
+    runAsUser: 0
+    runAsGroup: 0
+    readOnlyRootFilesystem: false
+
+  clustering:
+    enabled: false
+
+  enableReporting: false
+
+  extraEnv:
+    - name: NODE_NAME
+      valueFrom:
+        fieldRef:
+          fieldPath: spec.nodeName
+
+  # Agente de coleta com teto baixo por princípio: ele não pode ser o motivo de um
+  # OOM kill no nó que ele existe pra observar. Se 256Mi não bastarem, o problema é
+  # volume de log e se resolve no limits_config do Loki, não aqui.
+  resources:
+    requests:
+      cpu: 50m
+      memory: 128Mi
+    limits:
+      memory: 256Mi
+
+  configMap:
+    create: true
+    content: |-
+      logging {
+        level  = "info"
+        format = "logfmt"
+      }
+
+      // Descoberta restrita ao nó deste pod. Com um nó só o filtro não muda nada hoje;
+      // ele está aqui pro dia em que existirem dois e cada Alloy tentar ler o arquivo
+      // de log de pod que não roda na máquina dele — o que falha em silêncio, porque
+      // o target existe e o arquivo não.
+      discovery.kubernetes "pods" {
+        role = "pod"
+
+        selectors {
+          role  = "pod"
+          field = "spec.nodeName=" + sys.env("NODE_NAME")
+        }
+      }
+
+      discovery.relabel "log_de_pod" {
+        targets = discovery.kubernetes.pods.targets
+
+        rule {
+          source_labels = ["__meta_kubernetes_namespace"]
+          target_label  = "namespace"
+        }
+
+        rule {
+          source_labels = ["__meta_kubernetes_pod_name"]
+          target_label  = "pod"
+        }
+
+        rule {
+          source_labels = ["__meta_kubernetes_pod_container_name"]
+          target_label  = "container"
+        }
+
+        rule {
+          source_labels = ["__meta_kubernetes_pod_label_app_kubernetes_io_name"]
+          target_label  = "app"
+        }
+
+        // Único jeito de casar target vindo do apiserver com arquivo em disco: o
+        // caminho é derivado do UID do pod, não do nome dele. O `*` antes do UID
+        // cobre o prefixo <namespace>_<pod> que o kubelet põe no diretório.
+        rule {
+          source_labels = ["__meta_kubernetes_pod_uid", "__meta_kubernetes_pod_container_name"]
+          separator     = "/"
+          action        = "replace"
+          replacement   = "/var/log/pods/*$1/*.log"
+          target_label  = "__path__"
+        }
+      }
+
+      local.file_match "log_de_pod" {
+        path_targets = discovery.relabel.log_de_pod.output
+      }
+
+      loki.source.file "log_de_pod" {
+        targets    = local.file_match.log_de_pod.targets
+        forward_to = [loki.process.cri.receiver]
+      }
+
+      loki.process "cri" {
+        // Formato de log do containerd: timestamp, stream, flag, mensagem em uma
+        // linha só. Sem este estágio a mensagem chega no Loki com o cabeçalho colado
+        // e toda query LogQL precisa descontar isso na mão.
+        stage.cri {}
+
+        // `filename` é o caminho em disco, com o UID do pod dentro: label que muda a
+        // cada restart de pod. Cada restart criaria um stream novo no índice do Loki
+        // pra responder exatamente as mesmas perguntas que `pod` já responde. É assim
+        // que se explode o índice sem ganhar nada.
+        stage.label_drop {
+          values = ["filename"]
+        }
+
+        forward_to = [loki.write.homelab.receiver]
+      }
+
+      // Evento do Kubernetes vira log: é onde estão OOMKilled, FailedScheduling e
+      // Unhealthy, que explicam metade dos alertas de CrashLoop e não aparecem em
+      // nenhum log de aplicação.
+      // Ressalva honesta: isto roda por réplica, então com dois nós passaria a
+      // duplicar evento e teria que sair do DaemonSet pra um Deployment de uma
+      // réplica. Com um nó, está correto.
+      loki.source.kubernetes_events "eventos" {
+        job_name   = "eventos-kubernetes"
+        forward_to = [loki.write.homelab.receiver]
+      }
+
+      loki.write "homelab" {
+        endpoint {
+          // Direto no SingleBinary, sem gateway (ver loki.values.yaml).
+          url = "http://loki.observabilidade.svc.cluster.local:3100/loki/api/v1/push"
+        }
+
+        external_labels = {
+          cluster = "homelab",
+        }
+      }

@@ -1,0 +1,308 @@
+# kube-prometheus-stack — cluster homelab (k3s, um nó só, produtos reais em cima).
+#
+# Orçamento de disco desta camada, porque num nó só o disco é o recurso disputado:
+#   Prometheus 20Gi + Loki 10Gi + Grafana 5Gi + Alertmanager 2Gi = 37Gi de local-path.
+# O resto do NVMe é dos produtos. Quando a observabilidade encosta nesse teto ela
+# apaga dado antigo; ela não tira espaço de quem ela observa. Por isso todo PVC aqui
+# tem tamanho fixo e todo componente tem teto de memória.
+
+fullnameOverride: ""
+
+# ---------------------------------------------------------------------------
+# Componentes que o k3s não expõe
+# ---------------------------------------------------------------------------
+# k3s roda apiserver, scheduler, controller-manager e etcd (kine/sqlite) dentro de
+# um processo só, e não publica as portas 10257/10259/2381 que o chart tenta raspar.
+# Deixar isso habilitado não "monitora o control plane": produz KubeSchedulerDown
+# eterno. Alerta que sempre dispara é o jeito mais rápido de treinar alguém a
+# ignorar o celular.
+kubeControllerManager:
+  enabled: false
+kubeScheduler:
+  enabled: false
+kubeProxy:
+  enabled: false
+kubeEtcd:
+  enabled: false
+
+# ---------------------------------------------------------------------------
+# Regras padrão
+# ---------------------------------------------------------------------------
+defaultRules:
+  create: true
+  rules:
+    # Sem esses componentes não há métrica pra regra avaliar; a regra só produziria
+    # ausência de dado interpretada como falha.
+    etcd: false
+    kubeProxy: false
+    kubeControllerManager: false
+    kubeSchedulerAlerting: false
+    kubeSchedulerRecording: false
+    windows: false
+  disabled:
+    # Reimplementados em alertas.yaml com limiar e `for:` calibrados pra este cluster,
+    # e com runbook_url apontando pros runbooks daqui. Manter os dois significa dois
+    # push no celular pro mesmo incidente.
+    KubeNodeNotReady: true
+    KubePodCrashLooping: true
+    NodeFilesystemSpaceFillingUp: true
+    NodeFilesystemAlmostOutOfSpace: true
+    NodeMemoryHighUtilization: true
+
+    # "O cluster não sobrevive à queda de um nó" é uma constatação de arquitetura
+    # aqui, não um incidente. Num cluster de um nó só esses dois disparam no dia da
+    # instalação e nunca mais resolvem.
+    KubeCPUOvercommit: true
+    KubeMemoryOvercommit: true
+
+    # Throttling de CPU é o comportamento esperado de quem tem limit; vira ruído
+    # constante em homelab. O sintoma que importa (latência) é medido no produto.
+    CPUThrottlingHigh: true
+
+# ---------------------------------------------------------------------------
+# Prometheus
+# ---------------------------------------------------------------------------
+prometheus:
+  enabled: true
+
+  # Sem ingress: o Prometheus não tem autenticação própria e não há motivo de
+  # publicar uma porta que só eu uso, e só via port-forward. Grafana é a porta da frente.
+  ingress:
+    enabled: false
+
+  prometheusSpec:
+    # Conta que justifica o número: ~60k séries ativas x 2 amostras/min x ~2 bytes
+    # por amostra depois da compressão ≈ 350 MB/dia. 15 dias ≈ 5,2 GB.
+    # Retenção de 15 dias cobre a pergunta "isso já aconteceu antes?" no ciclo de
+    # duas semanas em que eu de fato mexo no cluster; além disso vira arqueologia.
+    retention: 15d
+
+    # O teto de tempo é a intenção, o teto de tamanho é a garantia. Se a
+    # cardinalidade dobrar sem eu perceber, retentionSize apaga bloco antigo em vez
+    # de encher o disco e derrubar os produtos junto. 14GiB num PVC de 20Gi deixa
+    # ~6Gi pro WAL e pro pico de compactação, que não contam no retentionSize.
+    retentionSize: 14GiB
+
+    # 30s em vez de 15s: metade das amostras, metade do disco e metade da CPU, e
+    # nenhuma das perguntas que eu faço aqui precisa de resolução de 15s.
+    scrapeInterval: 30s
+    scrapeTimeout: 10s
+    evaluationInterval: 30s
+
+    walCompression: true
+    enableAdminAPI: false
+
+    externalLabels:
+      cluster: homelab
+
+    # Por padrão o chart só enxerga ServiceMonitor/PrometheusRule com label
+    # `release: <release>`. Com isso em false o Prometheus descobre objetos de
+    # qualquer namespace — que é o ponto: o ServiceMonitor do preview-operator vive
+    # nesta pasta e o Service dele vive em preview-system.
+    serviceMonitorSelectorNilUsesHelmValues: false
+    podMonitorSelectorNilUsesHelmValues: false
+    ruleSelectorNilUsesHelmValues: false
+    probeSelectorNilUsesHelmValues: false
+    scrapeConfigSelectorNilUsesHelmValues: false
+
+    storageSpec:
+      volumeClaimTemplate:
+        spec:
+          storageClassName: local-path
+          accessModes: ["ReadWriteOnce"]
+          resources:
+            requests:
+              storage: 20Gi
+
+    # Sem limit de CPU de propósito. Limit de CPU no Prometheus vira throttling
+    # exatamente durante compactação e query pesada, e regra de alerta avaliada com
+    # atraso é alerta que chega tarde. O que precisa de teto é memória, porque é
+    # memória que mata o nó inteiro — e o request de CPU já garante a fatia dele
+    # quando o nó aperta.
+    resources:
+      requests:
+        cpu: 300m
+        memory: 1Gi
+      limits:
+        memory: 2Gi
+
+# ---------------------------------------------------------------------------
+# Alertmanager
+# ---------------------------------------------------------------------------
+alertmanager:
+  enabled: true
+
+  # A rota inteira vive em alertmanager-rota.yaml. Justificativa em duas linhas:
+  # roteamento muda por operação (mudei o repeat depois de um plantão ruim, acrescentei
+  # uma inibição depois de tomar 40 push de uma vez) e values de chart mudam por upgrade.
+  # Separado, o diff de operação é legível sozinho. E AlertmanagerConfig (o CRD) não
+  # serve aqui porque o Operator prende toda rota vinda dele a um matcher de namespace,
+  # e a inibição que interessa neste cluster é justamente cross-namespace.
+  ingress:
+    enabled: false
+
+  alertmanagerSpec:
+    replicas: 1
+
+    # A chave é esta e não alertmanager.configSecret: values que o chart não
+    # conhece são ignorados sem erro, e o sintoma seria o Alertmanager subindo
+    # saudável com a rota padrão do chart — alerta nenhum chegando no celular e
+    # nada no log dizendo por quê.
+    configSecret: alertmanager-rota
+
+    # Impede o chart de renderizar o Secret de config dele. Sem isto sobra no
+    # namespace um Secret que ninguém lê, e Argo CD reconciliando um objeto morto
+    # é exatamente o tipo de ruído que faz `kubectl get secret` mentir.
+    useExistingSecret: true
+
+    # 120h porque o histórico de notificação só serve pra responder "isso me acordou
+    # semana passada?"; depois disso a resposta está no runbook ou no postmortem.
+    retention: 120h
+
+    # A URL do dead man's switch é um segredo (quem tiver ela silencia meu alarme de
+    # último recurso). Montada como arquivo e lida com `url_file` na rota, o Git nunca vê.
+    # O Secret em si é da frente platform/secrets, via External Secrets.
+    secrets:
+      - alertmanager-deadman
+
+    storage:
+      volumeClaimTemplate:
+        spec:
+          storageClassName: local-path
+          accessModes: ["ReadWriteOnce"]
+          resources:
+            requests:
+              storage: 2Gi
+
+    resources:
+      requests:
+        cpu: 20m
+        memory: 64Mi
+      limits:
+        memory: 128Mi
+
+# ---------------------------------------------------------------------------
+# Grafana
+# ---------------------------------------------------------------------------
+grafana:
+  enabled: true
+
+  # Credencial nunca no Git. O Secret é materializado pela frente platform/secrets.
+  admin:
+    existingSecret: grafana-admin
+    # Nomes das chaves DENTRO do Secret, que é o que o ExternalSecret de
+    # platform/secrets publica. `usuario`/`senha` são os nomes da propriedade no
+    # Vault e não chegam até aqui; usá-los faria o Grafana subir com admin em
+    # branco e recusar login.
+    userKey: admin-user
+    passwordKey: admin-password
+
+  # 5Gi guardam o SQLite do Grafana: usuário, preferência, snapshot, anotação.
+  # Dashboard não mora aqui — mora em ConfigMap com label grafana_dashboard, versionado
+  # neste repositório (é assim que dashboard-preview-operator.json entra). Dashboard
+  # editado na UI e não commitado morre no próximo `helm upgrade`, e tudo bem.
+  persistence:
+    enabled: true
+    type: pvc
+    storageClassName: local-path
+    size: 5Gi
+    accessModes:
+      - ReadWriteOnce
+
+  sidecar:
+    dashboards:
+      enabled: true
+      label: grafana_dashboard
+      searchNamespace: ALL
+      folderAnnotation: grafana_folder
+      provider:
+        foldersFromFilesStructure: true
+    datasources:
+      enabled: true
+      searchNamespace: ALL
+
+  additionalDataSources:
+    - name: Loki
+      type: loki
+      access: proxy
+      # Direto no SingleBinary: o gateway (nginx) do chart do Loki é balanceador pra
+      # um alvo só aqui. Ver loki.values.yaml.
+      url: http://loki.observabilidade.svc.cluster.local:3100
+      jsonData:
+        maxLines: 1000
+        timeout: 60
+
+  ingress:
+    enabled: true
+    # nginx e não traefik: o k3s sobe com o traefik desabilitado e quem atende a
+    # borda é o ingress-nginx da frente de rede, em DaemonSet com hostPort.
+    ingressClassName: nginx
+    annotations:
+      # Nome do ClusterIssuer como ele existe em platform/rede. Issuer inexistente
+      # não dá erro no Ingress: o Certificate fica pendente para sempre e o
+      # navegador serve o certificado padrão do controller.
+      cert-manager.io/cluster-issuer: letsencrypt-producao
+    hosts:
+      - grafana.rigo.dev.br
+    path: /
+    pathType: Prefix
+    tls:
+      - secretName: grafana-tls
+        hosts:
+          - grafana.rigo.dev.br
+
+  grafana.ini:
+    server:
+      root_url: https://grafana.rigo.dev.br
+    # Homelab não telefona pra casa: sem isso o Grafana faz requisição externa a cada
+    # carregamento de página e polui o log do egress.
+    analytics:
+      reporting_enabled: false
+      check_for_updates: false
+    users:
+      viewers_can_edit: false
+    auth.anonymous:
+      enabled: false
+
+  serviceMonitor:
+    enabled: true
+
+  # Grafana é o único componente daqui que uma pessoa usa interativamente, então ele
+  # ganha teto folgado o bastante pra render um dashboard pesado sem OOM no meio de
+  # uma investigação — que é exatamente a hora em que ele não pode morrer.
+  resources:
+    requests:
+      cpu: 100m
+      memory: 192Mi
+    limits:
+      memory: 512Mi
+
+# ---------------------------------------------------------------------------
+# Coletores
+# ---------------------------------------------------------------------------
+prometheus-node-exporter:
+  resources:
+    requests:
+      cpu: 50m
+      memory: 32Mi
+    limits:
+      memory: 96Mi
+
+kube-state-metrics:
+  # kube-state-metrics é a fonte da maioria dos alertas de carga aqui; se ele morre,
+  # metade das regras vira silêncio. O request é o que garante que ele não seja o
+  # primeiro a ser espremido quando o nó aperta.
+  resources:
+    requests:
+      cpu: 50m
+      memory: 128Mi
+    limits:
+      memory: 256Mi
+
+prometheusOperator:
+  resources:
+    requests:
+      cpu: 50m
+      memory: 128Mi
+    limits:
+      memory: 256Mi

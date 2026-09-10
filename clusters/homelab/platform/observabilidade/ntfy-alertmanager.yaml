@@ -1,0 +1,101 @@
+# Ponte entre o Alertmanager e o ntfy.
+#
+# O Alertmanager só sabe mandar o JSON dele por webhook_configs, e o ntfy trata
+# corpo de POST como o texto da notificação: apontar um no outro faz o celular
+# receber um blob de JSON com chaves e colchetes. A ponte traduz — título,
+# prioridade e etiqueta viram cabeçalho do ntfy, e o alerta chega legível.
+#
+# Manifesto solto e não chart: a ponte é um Deployment, um Service e um
+# ConfigMap. Um chart aqui seria uma versão a mais para acompanhar sem nada em
+# troca.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: ntfy-alertmanager
+  namespace: observabilidade
+  labels:
+    app.kubernetes.io/name: ntfy-alertmanager
+data:
+  config.scfg: |
+    # O tópico não vem daqui: vem do caminho da URL que o Alertmanager chama
+    # (/homelab-critico, /homelab-aviso, /homelab-preview). É o que permite três
+    # receivers com severidades diferentes usando uma ponte só.
+    base-url https://ntfy.sh
+    http-address :8080
+
+    # A prioridade sobe com a severidade. Sem isso, aviso e crítico chegam
+    # iguais e o modo silencioso do celular trata os dois do mesmo jeito.
+    labels {
+      order critical,warning,info
+      priority urgent,high,default
+    }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ntfy-alertmanager
+  namespace: observabilidade
+  labels:
+    app.kubernetes.io/name: ntfy-alertmanager
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: ntfy-alertmanager
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: ntfy-alertmanager
+      annotations:
+        # Força o rollout quando a config muda. Sem isto, editar o ConfigMap
+        # não reinicia o pod e a ponte segue com a configuração antiga sem
+        # nenhum sinal de que está desatualizada.
+        checksum/config: "gerado-pelo-argocd-no-sync"
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65534
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: ponte
+          image: codeberg.org/xenrox/ntfy-alertmanager:v0.4.2
+          args: ["-config", "/etc/ntfy-alertmanager/config.scfg"]
+          ports:
+            - name: http
+              containerPort: 8080
+          volumeMounts:
+            - name: config
+              mountPath: /etc/ntfy-alertmanager
+              readOnly: true
+          resources:
+            requests:
+              cpu: 10m
+              memory: 32Mi
+            limits:
+              cpu: 100m
+              memory: 64Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+      volumes:
+        - name: config
+          configMap:
+            name: ntfy-alertmanager
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: ntfy-alertmanager
+  namespace: observabilidade
+  labels:
+    app.kubernetes.io/name: ntfy-alertmanager
+spec:
+  selector:
+    app.kubernetes.io/name: ntfy-alertmanager
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http

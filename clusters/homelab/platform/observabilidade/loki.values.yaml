@@ -1,0 +1,166 @@
+# Loki — modo SingleBinary, armazenamento em filesystem.
+#
+# Por que filesystem e não object storage: não existe object storage neste cluster, e
+# subir um MinIO só pra guardar log do próprio cluster é trocar um ponto de falha por
+# dois — se o MinIO cai, o log de por que ele caiu vai pra lugar nenhum. Com um nó só,
+# o disco local já é o limite de durabilidade de tudo que roda aqui; fingir o
+# contrário com uma camada a mais custa RAM e não compra disponibilidade nenhuma.
+# No dia em que existir storage fora do nó, o que muda são schemaConfig e storage —
+# o resto do arquivo continua igual.
+#
+# Por que SingleBinary e não SimpleScalable: com um nó, separar read/write/backend só
+# multiplica processo Go e overhead de gRPC dentro da mesma máquina.
+
+deploymentMode: SingleBinary
+
+loki:
+  auth_enabled: false
+
+  commonConfig:
+    replication_factor: 1
+    path_prefix: /var/loki
+
+  storage:
+    type: filesystem
+    filesystem:
+      chunks_directory: /var/loki/chunks
+      rules_directory: /var/loki/rules
+      admin_api_directory: /var/loki/admin
+
+  schemaConfig:
+    configs:
+      # tsdb + v13 é o único esquema que vale começar hoje; period de 24h porque o
+      # compactor só aplica retenção em índice fechado, então períodos maiores atrasam
+      # a liberação de disco.
+      - from: "2024-06-01"
+        store: tsdb
+        object_store: filesystem
+        schema: v13
+        index:
+          prefix: index_
+          period: 24h
+
+  limits_config:
+    # 14 dias. Log responde "o que aconteceu naquele deploy" e essa pergunta tem prazo
+    # de validade curto: depois de duas semanas a resposta já está no runbook ou no
+    # postmortem, não no log cru.
+    # Conta: ~20 pods falantes x ~1 linha/s x ~250 B ≈ 400 MB/dia cru, ~80 MB/dia
+    # depois do snappy. 14 dias ≈ 1,2 GB. O PVC de 10Gi é folga proposital, porque o
+    # que surpreende em volume de log é sempre um produto errando em laço — e é
+    # exatamente aí que eu preciso do log.
+    retention_period: 336h
+
+    # Rejeitar amostra velha protege o índice de reescrita retroativa quando o Alloy
+    # volta de uma queda longa com posição antiga. 12h é mais que qualquer janela de
+    # manutenção que eu faço aqui.
+    reject_old_samples: true
+    reject_old_samples_max_age: 12h
+
+    # Teto por stream e não só global: sem ele, um único container em laço de erro
+    # consome a cota de ingestão inteira e o log de todo mundo some junto — no dia em
+    # que mais se precisa dele.
+    ingestion_rate_mb: 8
+    ingestion_burst_size_mb: 16
+    per_stream_rate_limit: 3MB
+    per_stream_rate_limit_burst: 10MB
+
+    max_query_series: 5000
+    max_query_parallelism: 4
+    split_queries_by_interval: 24h
+    volume_enabled: true
+
+  compactor:
+    working_directory: /var/loki/compactor
+    # Sem isto a retention_period acima é decorativa: quem apaga chunk vencido é o
+    # compactor, e ele nasce desligado.
+    retention_enabled: true
+    delete_request_store: filesystem
+    compaction_interval: 10m
+    # 2h entre marcar e apagar dá margem pra desfazer um erro de retenção antes que
+    # ele seja permanente.
+    retention_delete_delay: 2h
+    retention_delete_worker_count: 50
+
+  ingester:
+    chunk_encoding: snappy
+    # 30m/2h fecham chunk mais cedo do que o padrão. Com filesystem local e um nó só,
+    # chunk aberto vive na memória do ingester e some num restart — fechar cedo troca
+    # um pouco de compressão por log que sobrevive a `kubectl rollout restart`.
+    chunk_idle_period: 30m
+    max_chunk_age: 2h
+    chunk_target_size: 1572864
+
+  querier:
+    max_concurrent: 4
+
+  server:
+    http_listen_port: 3100
+    grpc_server_max_recv_msg_size: 8388608
+    grpc_server_max_send_msg_size: 8388608
+
+  analytics:
+    reporting_enabled: false
+
+singleBinary:
+  replicas: 1
+  persistence:
+    enabled: true
+    storageClass: local-path
+    size: 10Gi
+  # Loki é um consumidor de memória elástico: query longa infla o processo e ele não
+  # devolve. O teto de 768Mi é o que impede que uma pergunta minha sobre log de duas
+  # semanas atrás derrube o produto que eu estava investigando.
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      memory: 768Mi
+
+# Os modos distribuídos ficam zerados explicitamente. Deixar no padrão faz o chart
+# subir read/write/backend junto com o SingleBinary.
+read:
+  replicas: 0
+write:
+  replicas: 0
+backend:
+  replicas: 0
+
+# O gateway é um nginx que balanceia entre réplicas. Com uma réplica ele é um salto
+# de rede e um pod a mais pra fazer nada; Grafana e Alloy falam direto com o 3100.
+gateway:
+  enabled: false
+
+# Armadilha do chart: chunksCache nasce habilitado pedindo ~8Gi de memcached. Num nó
+# de 32Gi isso é a observabilidade comendo um quarto da máquina que ela observa,
+# pra acelerar uma query que eu faço três vezes por semana.
+chunksCache:
+  enabled: false
+resultsCache:
+  enabled: false
+
+# MinIO desligado explicitamente: é o padrão do chart quando storage não é filesystem,
+# e é a coisa que eu não quero (ver cabeçalho).
+minio:
+  enabled: false
+
+# O canary escreve e lê log continuamente pra medir o próprio Loki. Vale em cluster
+# grande; aqui é escrita constante em disco disputado pra medir um serviço cuja falha
+# eu percebo na primeira query que não volta.
+lokiCanary:
+  enabled: false
+
+test:
+  enabled: false
+
+monitoring:
+  serviceMonitor:
+    enabled: true
+  # Dashboard e regra de alerta do Loki vêm do chart em ConfigMap solto; as regras que
+  # importam pra este cluster estão em alertas.yaml, com runbook.
+  dashboards:
+    enabled: false
+  rules:
+    enabled: false
+  selfMonitoring:
+    enabled: false

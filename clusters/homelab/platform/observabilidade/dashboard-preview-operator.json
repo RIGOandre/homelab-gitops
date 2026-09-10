@@ -1,0 +1,429 @@
+{
+  "annotations": {
+    "list": [
+      {
+        "builtIn": 1,
+        "datasource": { "type": "grafana", "uid": "-- Grafana --" },
+        "enable": true,
+        "hide": true,
+        "iconColor": "rgba(0, 211, 255, 1)",
+        "name": "Annotations & Alerts",
+        "type": "dashboard"
+      }
+    ]
+  },
+  "description": "Operação dos ambientes efêmeros de pull request criados pelo preview-operator.",
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 1,
+  "id": null,
+  "links": [],
+  "panels": [
+    {
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "description": "Gauge: quantos ambientes de preview existem agora. Sem rate() nem increase(): o valor já é o estado atual, e taxa sobre gauge não significa nada.",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "orange", "value": 8 },
+              { "color": "red", "value": 12 }
+            ]
+          },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": { "h": 5, "w": 5, "x": 0, "y": 0 },
+      "id": 1,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": ["lastNotNull"],
+          "fields": "",
+          "values": false
+        },
+        "showPercentChange": false,
+        "textMode": "auto",
+        "wideLayout": true
+      },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "editorMode": "code",
+          "expr": "sum(preview_environments_active{repository=~\"$repository\"})",
+          "legendFormat": "ativos",
+          "range": true,
+          "refId": "A"
+        }
+      ],
+      "title": "Ambientes ativos agora",
+      "type": "stat"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "description": "O mesmo gauge quebrado por repositório. Responde de quem é a fila quando o número total sobe.",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": {
+            "axisBorderShow": false,
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "drawStyle": "line",
+            "fillOpacity": 15,
+            "gradientMode": "none",
+            "hideFrom": { "legend": false, "tooltip": false, "viz": false },
+            "insertNulls": false,
+            "lineInterpolation": "stepAfter",
+            "lineWidth": 1,
+            "pointSize": 5,
+            "scaleDistribution": { "type": "linear" },
+            "showPoints": "never",
+            "spanNulls": false,
+            "stacking": { "group": "A", "mode": "normal" },
+            "thresholdsStyle": { "mode": "off" }
+          },
+          "decimals": 0,
+          "mappings": [],
+          "min": 0,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [{ "color": "green", "value": null }]
+          },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": { "h": 5, "w": 19, "x": 5, "y": 0 },
+      "id": 2,
+      "options": {
+        "legend": {
+          "calcs": ["lastNotNull", "max"],
+          "displayMode": "table",
+          "placement": "right",
+          "showLegend": true
+        },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "editorMode": "code",
+          "expr": "sum by (repository) (preview_environments_active{repository=~\"$repository\"})",
+          "legendFormat": "{{repo}}",
+          "range": true,
+          "refId": "A"
+        }
+      ],
+      "title": "Ambientes ativos por repositório",
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "description": "Contador: rate() por fase, convertido para transições por minuto. Crescimento em Failed sem crescimento correspondente em Ready é o operator batendo a cabeça. $__rate_interval acompanha o scrape de 30s sem que a janela precise ser ajustada na mão.",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": {
+            "axisBorderShow": false,
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "drawStyle": "line",
+            "fillOpacity": 10,
+            "gradientMode": "none",
+            "hideFrom": { "legend": false, "tooltip": false, "viz": false },
+            "insertNulls": false,
+            "lineInterpolation": "linear",
+            "lineWidth": 1,
+            "pointSize": 5,
+            "scaleDistribution": { "type": "linear" },
+            "showPoints": "never",
+            "spanNulls": false,
+            "stacking": { "group": "A", "mode": "none" },
+            "thresholdsStyle": { "mode": "off" }
+          },
+          "mappings": [],
+          "min": 0,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [{ "color": "green", "value": null }]
+          },
+          "unit": "cpm"
+        },
+        "overrides": [
+          {
+            "matcher": { "id": "byName", "options": "Failed" },
+            "properties": [
+              { "id": "color", "value": { "fixedColor": "red", "mode": "fixed" } }
+            ]
+          }
+        ]
+      },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 5 },
+      "id": 3,
+      "options": {
+        "legend": {
+          "calcs": ["lastNotNull", "max"],
+          "displayMode": "table",
+          "placement": "right",
+          "showLegend": true
+        },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "editorMode": "code",
+          "expr": "sum by (phase) (rate(preview_environment_transitions_total{repository=~\"$repository\"}[$__rate_interval])) * 60",
+          "legendFormat": "{{phase}}",
+          "range": true,
+          "refId": "A"
+        }
+      ],
+      "title": "Transições por fase",
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "description": "p95 do reconcile por resultado. A agregação é sum by (le, result): o le precisa sobreviver ao sum, senão o histogram_quantile fica sem balde para interpolar e devolve NaN. Sem filtro por repositório de propósito: a duração do reconcile é propriedade do operator, não do repositório.",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": {
+            "axisBorderShow": false,
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "drawStyle": "line",
+            "fillOpacity": 10,
+            "gradientMode": "none",
+            "hideFrom": { "legend": false, "tooltip": false, "viz": false },
+            "insertNulls": false,
+            "lineInterpolation": "linear",
+            "lineWidth": 1,
+            "pointSize": 5,
+            "scaleDistribution": { "type": "linear" },
+            "showPoints": "never",
+            "spanNulls": false,
+            "stacking": { "group": "A", "mode": "none" },
+            "thresholdsStyle": { "mode": "dashed" }
+          },
+          "mappings": [],
+          "min": 0,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "orange", "value": 30 }
+            ]
+          },
+          "unit": "s"
+        },
+        "overrides": [
+          {
+            "matcher": { "id": "byName", "options": "error" },
+            "properties": [
+              { "id": "color", "value": { "fixedColor": "red", "mode": "fixed" } }
+            ]
+          }
+        ]
+      },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 5 },
+      "id": 4,
+      "options": {
+        "legend": {
+          "calcs": ["lastNotNull", "max"],
+          "displayMode": "table",
+          "placement": "right",
+          "showLegend": true
+        },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "editorMode": "code",
+          "expr": "histogram_quantile(0.95, sum by (le, result) (rate(preview_environment_reconcile_duration_seconds_bucket[$__rate_interval])))",
+          "legendFormat": "{{result}}",
+          "range": true,
+          "refId": "A"
+        }
+      ],
+      "title": "Reconcile p95 por resultado",
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "description": "Quanto falta para cada ambiente vencer, ordenado do mais próximo. A métrica é um timestamp unix absoluto, então a conta é sempre contra time(). Consulta instantânea: aqui interessa o agora, não a série. O vermelho abaixo de 30 minutos é o mesmo limiar do alerta PreviewAmbienteExpirando: painel e alerta discordarem é como se perde confiança nos dois. Valor negativo é ambiente vencido que a coleta do operator ainda não removeu.",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "custom": {
+            "align": "auto",
+            "cellOptions": { "type": "auto" },
+            "filterable": true,
+            "inspect": false
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "red", "value": null },
+              { "color": "orange", "value": 1800 },
+              { "color": "green", "value": 7200 }
+            ]
+          },
+          "unit": "s"
+        },
+        "overrides": [
+          {
+            "matcher": { "id": "byName", "options": "Expira em" },
+            "properties": [
+              {
+                "id": "custom.cellOptions",
+                "value": { "mode": "gradient", "type": "color-background" }
+              },
+              { "id": "custom.width", "value": 180 }
+            ]
+          }
+        ]
+      },
+      "gridPos": { "h": 9, "w": 24, "x": 0, "y": 13 },
+      "id": 5,
+      "options": {
+        "cellHeight": "sm",
+        "footer": {
+          "countRows": false,
+          "fields": "",
+          "reducer": ["sum"],
+          "show": false
+        },
+        "showHeader": true,
+        "sortBy": [{ "desc": false, "displayName": "Expira em" }]
+      },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "editorMode": "code",
+          "expr": "preview_environment_expires_at_seconds{repository=~\"$repository\"} - time()",
+          "format": "table",
+          "instant": true,
+          "legendFormat": "__auto",
+          "range": false,
+          "refId": "A"
+        }
+      ],
+      "title": "Quanto falta para cada ambiente vencer",
+      "transformations": [
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": {
+              "Time": true,
+              "__name__": true,
+              "container": true,
+              "endpoint": true,
+              "instance": true,
+              "job": true,
+              "pod": true,
+              "service": true
+            },
+            "indexByName": {
+              "Value": 3,
+              "namespace": 2,
+              "pr": 1,
+              "repo": 0
+            },
+            "renameByName": {
+              "Value": "Expira em",
+              "namespace": "Namespace",
+              "pr": "PR",
+              "repo": "Repositório"
+            }
+          }
+        },
+        {
+          "id": "sortBy",
+          "options": {
+            "fields": {},
+            "sort": [{ "desc": false, "field": "Expira em" }]
+          }
+        }
+      ],
+      "type": "table"
+    }
+  ],
+  "preload": false,
+  "refresh": "1m",
+  "schemaVersion": 39,
+  "tags": ["homelab", "preview-operator"],
+  "templating": {
+    "list": [
+      {
+        "current": {},
+        "description": "Datasource como variável, nunca fixada: o uid do Prometheus muda entre um cluster e outro e entre uma reinstalação e outra, e dashboard com uid cravado quebra em silêncio no próximo bootstrap.",
+        "hide": 0,
+        "includeAll": false,
+        "label": "Datasource",
+        "multi": false,
+        "name": "datasource",
+        "options": [],
+        "query": "prometheus",
+        "queryValue": "",
+        "refresh": 1,
+        "regex": "",
+        "skipUrlSync": false,
+        "type": "datasource"
+      },
+      {
+        "allValue": ".*",
+        "current": {
+          "selected": true,
+          "text": ["All"],
+          "value": ["$__all"]
+        },
+        "datasource": { "type": "prometheus", "uid": "${datasource}" },
+        "definition": "label_values(preview_environments_active, repository)",
+        "hide": 0,
+        "includeAll": true,
+        "label": "Repositório",
+        "multi": true,
+        "name": "repository",
+        "options": [],
+        "query": {
+          "qryType": 1,
+          "query": "label_values(preview_environments_active, repository)",
+          "refId": "PrometheusVariableQueryEditor-VariableQuery"
+        },
+        "refresh": 2,
+        "regex": "",
+        "skipUrlSync": false,
+        "sort": 1,
+        "type": "query"
+      }
+    ]
+  },
+  "time": { "from": "now-6h", "to": "now" },
+  "timepicker": {},
+  "timezone": "America/Sao_Paulo",
+  "title": "Preview Operator",
+  "uid": "preview-operator",
+  "version": 1,
+  "weekStart": ""
+}

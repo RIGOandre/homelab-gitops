@@ -1,0 +1,49 @@
+# ServiceMonitor do preview-operator.
+#
+# Mora aqui, e não junto do operator, porque quem decide o que este cluster raspa é a
+# camada de observabilidade — o operator publica /metrics e não precisa saber que
+# existe um Prometheus. Isso também mantém o repositório do preview-operator portátil.
+#
+# É por isso que serviceMonitorSelectorNilUsesHelmValues está em false nos values do
+# kube-prometheus-stack: sem aquilo, um ServiceMonitor fora do release seria ignorado
+# em silêncio, que é o modo de falha mais caro deste arquivo.
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: preview-operator
+  namespace: observabilidade
+  labels:
+    app.kubernetes.io/name: preview-operator
+    app.kubernetes.io/part-of: observabilidade
+    release: kube-prometheus-stack
+spec:
+  namespaceSelector:
+    matchNames:
+      - preview-system
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: preview-operator
+  endpoints:
+    - port: metrics
+      path: /metrics
+      scheme: http
+      # 30s alinhado com o scrapeInterval global. O alerta mais apertado do operator
+      # (PreviewAmbienteExpirando) trabalha numa janela de 30 minutos, então resolução
+      # mais fina não compraria aviso mais cedo — só mais amostra no disco.
+      interval: 30s
+      scrapeTimeout: 10s
+
+      # honorLabels false de propósito: as séries do operator já carregam `namespace`
+      # (o do ambiente de preview, que é o dado que interessa) e ele colidiria com o
+      # namespace do alvo. Deixando o Prometheus renomear, o do alvo vence e o do
+      # ambiente vira `exported_namespace` — perceptível e recuperável. Com true, o
+      # label do alvo seria sobrescrito em silêncio e a origem da série sumiria.
+      honorLabels: false
+
+      metricRelabelings:
+        # process_resident_memory_bytes já responde "o operator está vazando?".
+        # A família go_memstats são ~30 séries por instância que eu nunca abri, e
+        # cardinalidade num nó só é orçamento de disco direto.
+        - sourceLabels: [__name__]
+          regex: "go_memstats_.*|go_gc_.*|go_info"
+          action: drop

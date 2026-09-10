@@ -1,0 +1,399 @@
+# Regras de alerta do cluster homelab.
+#
+# Critério pra uma regra existir aqui: se ela disparar às 3h da manhã, existe alguma
+# coisa que eu faria acordado. O que não passa nesse teste vira painel, não alerta.
+# Toda regra aponta pra um runbook, porque alerta sem runbook vira pânico com URL.
+#
+# Separado em três objetos por ciclo de vida: o nó é hardware, a plataforma é
+# infraestrutura compartilhada, o preview-operator é software meu. Cada um muda por
+# um motivo diferente e o diff fica honesto.
+---
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: homelab-no
+  namespace: observabilidade
+  labels:
+    app.kubernetes.io/part-of: observabilidade
+    prometheus: kube-prometheus-stack
+    role: alert-rules
+spec:
+  groups:
+    - name: homelab.no
+      # 1m em vez dos 30s globais: nenhuma destas regras muda de opinião em 30s, e
+      # avaliar menos é CPU que fica com os produtos.
+      interval: 1m
+      rules:
+        # predict_linear e não limiar fixo: disco a 80% parado há semanas não é
+        # incidente, e disco a 60% subindo rápido é. O que interessa é a inclinação,
+        # não a altura. A janela de 6h é longa o bastante pra ignorar o pico de um
+        # build e curta o bastante pra pegar um pod que começou a vazar log hoje de
+        # manhã; 24h de horizonte é o prazo em que eu consigo limpar imagem antiga
+        # sem que isso vire madrugada.
+        # O guarda de 30% existe pra que a previsão não me acorde por um sistema de
+        # arquivos com 90% livre encolhendo devagar — tecnicamente vai encher, mas
+        # não dentro de nenhum futuro que me interesse.
+        - alert: DiscoDoNoEnchendo
+          expr: |
+            (
+              node_filesystem_avail_bytes{job="node-exporter", fstype!~"tmpfs|ramfs|overlay|squashfs"}
+                /
+              node_filesystem_size_bytes{job="node-exporter", fstype!~"tmpfs|ramfs|overlay|squashfs"}
+              < 0.30
+            )
+            and
+            (
+              predict_linear(
+                node_filesystem_avail_bytes{job="node-exporter", fstype!~"tmpfs|ramfs|overlay|squashfs"}[6h],
+                24 * 3600
+              ) < 0
+            )
+          for: 1h
+          labels:
+            severity: warning
+          annotations:
+            summary: "Disco {{ $labels.mountpoint }} deve encher em menos de 24h"
+            description: >-
+              O sistema de arquivos {{ $labels.mountpoint }} ({{ $labels.device }}) está com
+              {{ $value | humanizePercentage }} livre e, mantida a taxa de consumo das últimas
+              6 horas, chega a zero dentro de 24 horas. Ainda dá pra resolver acordado.
+            runbook_url: https://github.com/RIGOandre/Homelab_GitOps/blob/main/docs/runbooks/disco-cheio.md
+
+        # Aqui o limiar fixo volta a fazer sentido, e é por isso que os dois alertas
+        # coexistem: abaixo de 10% livre não importa mais a inclinação, porque o
+        # kubelet começa a despejar pod por pressão de disco (nodefs.available<10%).
+        # A previsão responde "vai dar problema"; este responde "já está dando".
+        - alert: DiscoDoNoQuaseCheio
+          expr: |
+            node_filesystem_avail_bytes{job="node-exporter", fstype!~"tmpfs|ramfs|overlay|squashfs"}
+              /
+            node_filesystem_size_bytes{job="node-exporter", fstype!~"tmpfs|ramfs|overlay|squashfs"}
+            < 0.10
+          for: 15m
+          labels:
+            severity: critical
+          annotations:
+            summary: "Disco {{ $labels.mountpoint }} com menos de 10% livre"
+            description: >-
+              {{ $labels.mountpoint }} está com {{ $value | humanizePercentage }} livre. Nesse
+              patamar o kubelet passa a despejar pod por pressão de disco e o Prometheus para
+              de gravar. Liberar espaço agora.
+            runbook_url: https://github.com/RIGOandre/Homelab_GitOps/blob/main/docs/runbooks/disco-cheio.md
+
+        # Este alerta cobre o caso em que o nó está NotReady mas o kubelet ainda
+        # reporta condição — kubelet travado, containerd morto, disco em read-only.
+        # Nó realmente morto leva o Prometheus junto e nenhuma regra deste arquivo
+        # dispara: quem cobre esse caso é o Watchdog roteado pro dead man's switch
+        # em alertmanager-rota.yaml.
+        # 5m porque reinício de kubelet num upgrade de k3s leva ~40s e não é notícia.
+        # É a origem da regra de inibição principal: com o nó fora, todo o resto é
+        # consequência.
+        - alert: NoNotReady
+          expr: |
+            kube_node_status_condition{job="kube-state-metrics", condition="Ready", status="true"} == 0
+          for: 5m
+          labels:
+            severity: critical
+          annotations:
+            summary: "Nó {{ $labels.node }} está NotReady"
+            description: >-
+              O nó {{ $labels.node }} está NotReady há mais de 5 minutos. Como o cluster tem um
+              nó só, tudo que roda aqui está parado ou vai parar. Os demais alertas estão
+              inibidos de propósito enquanto este estiver ativo.
+            runbook_url: https://github.com/RIGOandre/Homelab_GitOps/blob/main/docs/runbooks/no-notready.md
+
+        # MemAvailable e não MemFree. Num nó com page cache quente o MemFree vive
+        # perto de zero e isso é o kernel fazendo o trabalho dele; alertar em MemFree
+        # é alarme falso garantido. MemAvailable é a estimativa do próprio kernel de
+        # quanto dá pra alocar sem entrar em swap ou matar processo.
+        - alert: MemoriaDoNoSaturada
+          expr: |
+            100 * (
+              1 - node_memory_MemAvailable_bytes{job="node-exporter"}
+                    / node_memory_MemTotal_bytes{job="node-exporter"}
+            ) > 90
+          for: 10m
+          labels:
+            severity: critical
+          annotations:
+            summary: "Memória do nó {{ $labels.instance }} acima de 90%"
+            description: >-
+              {{ $value | printf "%.1f" }}% da memória do nó está comprometida (MemAvailable).
+              O próximo pod a crescer é candidato a OOM kill, e quem escolhe não sou eu.
+            runbook_url: https://github.com/RIGOandre/Homelab_GitOps/blob/main/docs/runbooks/saturacao-do-no.md
+
+        # Sem espera: o OOM kill já aconteceu, o `for` curto só existe pra sobreviver
+        # a um scrape perdido. Este é o alerta que explica retroativamente metade dos
+        # CrashLoop — por isso ele é separado e não uma nota de rodapé do de memória.
+        - alert: NoSofreuOomKill
+          expr: |
+            increase(node_vmstat_oom_kill{job="node-exporter"}[10m]) > 0
+          for: 1m
+          labels:
+            severity: critical
+          annotations:
+            summary: "Kernel matou processo por falta de memória em {{ $labels.instance }}"
+            description: >-
+              O kernel executou {{ $value | printf "%.0f" }} OOM kill(s) nos últimos 10 minutos.
+              Descobrir qual container estourou o limit antes de aumentar o limit de todo mundo.
+            runbook_url: https://github.com/RIGOandre/Homelab_GitOps/blob/main/docs/runbooks/saturacao-do-no.md
+
+        # 90% por 20 minutos, não 80% por 5: num nó só, build de imagem e sync do
+        # Argo CD encostam em 100% o tempo todo e isso é o nó fazendo o trabalho dele.
+        # O que dói é platô — CPU cravada meia hora significa fila, e fila significa
+        # latência no produto.
+        - alert: CpuDoNoSaturada
+          expr: |
+            100 * (
+              1 - avg by (instance) (
+                    rate(node_cpu_seconds_total{job="node-exporter", mode="idle"}[5m])
+                  )
+            ) > 90
+          for: 20m
+          labels:
+            severity: warning
+          annotations:
+            summary: "CPU do nó {{ $labels.instance }} saturada há 20 minutos"
+            description: >-
+              CPU em {{ $value | printf "%.1f" }}% de uso há 20 minutos. Não é pico de build:
+              é platô. Ver quem está consumindo antes que a latência apareça no produto.
+            runbook_url: https://github.com/RIGOandre/Homelab_GitOps/blob/main/docs/runbooks/saturacao-do-no.md
+---
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: homelab-plataforma
+  namespace: observabilidade
+  labels:
+    app.kubernetes.io/part-of: observabilidade
+    prometheus: kube-prometheus-stack
+    role: alert-rules
+spec:
+  groups:
+    - name: homelab.carga
+      interval: 1m
+      rules:
+        # max_over_time e não seletor instantâneo: em CrashLoopBackOff o container
+        # alterna entre waiting e running a cada backoff, então metade das amostras
+        # não tem a série — e sem a série o relógio do `for:` zera e o alerta nunca
+        # completa 15 minutos. A janela de 5m segura a evidência entre as tentativas.
+        # 15m porque um deploy ruim que o rollback conserta sozinho não é incidente;
+        # o que sobrevive a 15 minutos de backoff não vai se resolver.
+        # keep_firing_for evita o pisca-alerta de resolvido/disparado a cada backoff
+        # bem-sucedido seguido de queda.
+        - alert: PodEmCrashLoopBackOff
+          expr: |
+            max by (namespace, pod, container) (
+              max_over_time(
+                kube_pod_container_status_waiting_reason{
+                  job="kube-state-metrics", reason="CrashLoopBackOff"
+                }[5m]
+              )
+            ) > 0
+          for: 15m
+          keep_firing_for: 15m
+          labels:
+            severity: critical
+          annotations:
+            summary: "Pod {{ $labels.namespace }}/{{ $labels.pod }} em CrashLoopBackOff"
+            description: >-
+              O container {{ $labels.container }} do pod {{ $labels.namespace }}/{{ $labels.pod }}
+              está em CrashLoopBackOff há mais de 15 minutos. Se houve OOM kill no nó no mesmo
+              intervalo, a causa provavelmente é limit de memória, não o código.
+            runbook_url: https://github.com/RIGOandre/Homelab_GitOps/blob/main/docs/runbooks/crashloop.md
+
+    - name: homelab.certificados
+      interval: 5m
+      rules:
+        # 21 dias e não 7: o Let's Encrypt renova aos 30 dias restantes, então um
+        # certificado com menos de 21 dias significa que já houve pelo menos uma
+        # janela de renovação que falhou em silêncio. 7 dias seria o alerta chegando
+        # junto com a queda.
+        # Nota de label: dependendo do honorLabels do ServiceMonitor do cert-manager,
+        # o `namespace` do Certificate pode chegar como `exported_namespace` porque
+        # colide com o namespace do alvo. Aqui o par (name, issuer) já identifica.
+        - alert: CertificadoExpirando
+          expr: |
+            (
+              min by (name, namespace, exported_namespace, issuer_name) (
+                certmanager_certificate_expiration_timestamp_seconds
+              ) - time()
+            ) < 21 * 24 * 3600
+          for: 1h
+          labels:
+            severity: warning
+          annotations:
+            summary: "Certificado {{ $labels.name }} expira em menos de 21 dias"
+            description: >-
+              O certificado {{ $labels.name }} (issuer {{ $labels.issuer_name }}) vence em
+              {{ $value | humanizeDuration }}. O cert-manager já deveria ter renovado; se não
+              renovou, a renovação está falhando em silêncio.
+            runbook_url: https://github.com/RIGOandre/Homelab_GitOps/blob/main/docs/runbooks/certificado-expirando.md
+
+        # Este é o incidente de verdade; o de cima é o sintoma com prazo. Certificate
+        # fora de Ready por 2h significa desafio ACME travado, DNS errado ou rate
+        # limit — nenhum dos três se resolve esperando.
+        - alert: CertificadoNaoRenovado
+          expr: |
+            certmanager_certificate_ready_status{condition="True"} == 0
+          for: 2h
+          labels:
+            severity: critical
+          annotations:
+            summary: "Certificado {{ $labels.name }} não está Ready há 2h"
+            description: >-
+              O Certificate {{ $labels.name }} está fora de Ready há mais de 2 horas. Enquanto
+              isso o certificado atual continua servindo, então há prazo — mas o relógio já
+              está correndo contra a data de expiração.
+            runbook_url: https://github.com/RIGOandre/Homelab_GitOps/blob/main/docs/runbooks/certificado-expirando.md
+
+    - name: homelab.argocd
+      interval: 1m
+      rules:
+        # max by e não sum by: se o application-controller tiver mais de uma réplica,
+        # a mesma Application aparece duas vezes e sum contaria 2 sem que nada tenha
+        # mudado. max mantém o valor em 1 por Application.
+        # 30m: com auto-sync ligado, drift some em segundos. Meia hora fora de sync
+        # significa que a sincronização está falhando ou que alguém mexeu no cluster
+        # à mão — os dois merecem uma olhada, nenhum merece acordar.
+        - alert: ArgoCdApplicationForaDeSincronia
+          expr: |
+            max by (name, project, dest_namespace) (
+              argocd_app_info{sync_status="OutOfSync"}
+            ) > 0
+          for: 30m
+          labels:
+            severity: warning
+          annotations:
+            summary: "Application {{ $labels.name }} fora de sincronia há 30min"
+            description: >-
+              A Application {{ $labels.name }} (projeto {{ $labels.project }}) está OutOfSync há
+              mais de 30 minutos. O estado do cluster deixou de ser o que está no Git, que é a
+              única premissa em que este repositório se apoia.
+            runbook_url: https://github.com/RIGOandre/Homelab_GitOps/blob/main/docs/runbooks/argocd-degradado.md
+
+        # Degraded e Missing juntos: Degraded é o recurso existindo e falhando,
+        # Missing é ele não existir. Unknown fica de fora porque acontece durante
+        # reinício do controller e resolve sozinho.
+        - alert: ArgoCdApplicationDegradada
+          expr: |
+            max by (name, project, dest_namespace, health_status) (
+              argocd_app_info{health_status=~"Degraded|Missing"}
+            ) > 0
+          for: 15m
+          labels:
+            severity: critical
+          annotations:
+            summary: "Application {{ $labels.name }} com saúde {{ $labels.health_status }}"
+            description: >-
+              A Application {{ $labels.name }} está {{ $labels.health_status }} há mais de 15
+              minutos no namespace {{ $labels.dest_namespace }}. Isso é carga fora do ar ou
+              recurso que nunca subiu, não drift de configuração.
+            runbook_url: https://github.com/RIGOandre/Homelab_GitOps/blob/main/docs/runbooks/argocd-degradado.md
+
+        # Sync isolado que falha e o retry conserta é rotina. Três em meia hora é o
+        # Argo CD batendo a cabeça no mesmo manifesto — CRD faltando, permissão,
+        # webhook rejeitando. O limiar existe pra separar retry de laço.
+        - alert: ArgoCdSyncFalhando
+          expr: |
+            sum by (name, project) (
+              increase(argocd_app_sync_total{phase=~"Error|Failed"}[30m])
+            ) > 3
+          for: 10m
+          labels:
+            severity: warning
+          annotations:
+            summary: "Sync da Application {{ $labels.name }} falhando em laço"
+            description: >-
+              {{ $value | printf "%.0f" }} sincronizações da Application {{ $labels.name }}
+              falharam nos últimos 30 minutos. Retry não vai resolver: ler o erro da última
+              operação antes de sincronizar de novo à mão.
+            runbook_url: https://github.com/RIGOandre/Homelab_GitOps/blob/main/docs/runbooks/argocd-degradado.md
+---
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: homelab-preview-operator
+  namespace: observabilidade
+  labels:
+    app.kubernetes.io/part-of: observabilidade
+    app.kubernetes.io/name: preview-operator
+    prometheus: kube-prometheus-stack
+    role: alert-rules
+spec:
+  groups:
+    - name: homelab.preview-operator
+      interval: 1m
+      rules:
+        # preview_environment_expires_at_seconds é um timestamp unix absoluto, então a
+        # conta é sempre contra time() — nada de rate() ou increase() aqui, um gauge
+        # que aponta pro futuro não tem taxa que signifique alguma coisa.
+        #
+        # O `and (... > 0)` é obrigatório e não é detalhe: sem ele, ambiente que já
+        # venceu (diferença negativa) também é "menor que 30 minutos" e o alerta de
+        # "vai vencer" ficaria disparando pra ambiente morto pra sempre.
+        #
+        # 30 minutos é o tempo de alguém terminar a revisão que está no meio ou pedir
+        # extensão. Menos que isso o aviso chega junto com o ambiente sumindo debaixo
+        # de quem está revisando o PR, que é exatamente o que este alerta existe pra
+        # evitar. `for: 2m` só protege contra scrape perdido sem comer a janela.
+        - alert: PreviewAmbienteExpirando
+          expr: |
+            (
+              (preview_environment_expires_at_seconds - time()) < 30 * 60
+            )
+            and
+            (
+              (preview_environment_expires_at_seconds - time()) > 0
+            )
+          for: 2m
+          labels:
+            severity: warning
+          annotations:
+            summary: "Ambiente de preview do PR #{{ $labels.pull_request }} expira em breve"
+            description: >-
+              O ambiente de preview do PR #{{ $labels.pull_request }} em {{ $labels.repository }}
+              (namespace {{ $labels.namespace }}) expira em {{ $value | humanizeDuration }}.
+              Se ainda há revisão em andamento, estender o prazo antes que ele suma.
+            runbook_url: https://github.com/RIGOandre/Homelab_GitOps/blob/main/docs/runbooks/preview-expirando.md
+
+        # Alerta sobre o operator, não sobre o ambiente: se o prazo venceu há 15
+        # minutos e a série continua existindo, o reconcile de coleta não rodou. Isso
+        # é namespace órfão acumulando e, num nó só, namespace órfão vira o alerta de
+        # disco daqui a duas semanas.
+        - alert: PreviewAmbienteVencidoNaoColetado
+          expr: |
+            (time() - preview_environment_expires_at_seconds) > 15 * 60
+          for: 15m
+          labels:
+            severity: warning
+          annotations:
+            summary: "Ambiente de preview vencido não foi coletado (PR #{{ $labels.pull_request }})"
+            description: >-
+              O ambiente do PR #{{ $labels.pull_request }} em {{ $labels.repository }} venceu há
+              {{ $value | humanizeDuration }} e ainda aparece nas métricas. A coleta do
+              preview-operator não está rodando; o namespace continua ocupando o nó.
+            runbook_url: https://github.com/RIGOandre/Homelab_GitOps/blob/main/docs/runbooks/preview-expirando.md
+
+        # Proporção e não contagem: um erro em dez reconciles é retry normal do
+        # controller-runtime, dez erros em dez é o operator quebrado. Contagem
+        # absoluta não distingue os dois e dispara junto com qualquer pico de carga.
+        # Quando não há reconcile nenhum a divisão não produz amostra e o alerta
+        # simplesmente não existe — que é o comportamento certo: sem trabalho, não há
+        # taxa de erro a julgar.
+        - alert: PreviewOperatorReconciliacaoFalhando
+          expr: |
+            sum(rate(preview_environment_reconcile_duration_seconds_count{result="error"}[10m]))
+              /
+            sum(rate(preview_environment_reconcile_duration_seconds_count[10m]))
+            > 0.2
+          for: 15m
+          labels:
+            severity: warning
+          annotations:
+            summary: "preview-operator com mais de 20% de reconciles falhando"
+            description: >-
+              {{ $value | humanizePercentage }} dos reconciles do preview-operator terminaram em
+              erro nos últimos 10 minutos. Ambiente de PR novo provavelmente não está subindo,
+              e o PR vai ficar sem preview sem ninguém avisar quem abriu.
+            runbook_url: https://github.com/RIGOandre/Homelab_GitOps/blob/main/docs/runbooks/preview-expirando.md

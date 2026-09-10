@@ -1,0 +1,177 @@
+# Roteamento do Alertmanager.
+#
+# Vive fora dos values do chart de propósito: a rota muda por operação (mudar
+# repeat_interval depois de um plantão ruim, acrescentar uma inibição depois de tomar
+# 40 push de uma vez), os values mudam por upgrade de chart. Separado, o diff de
+# operação é legível sozinho e não força reconciliar o release inteiro.
+#
+# Não é AlertmanagerConfig (o CRD) porque o Prometheus Operator prende toda rota vinda
+# do CRD a um matcher de namespace, e a inibição principal daqui — nó caiu, cala todo o
+# resto — precisa atravessar namespace pra valer alguma coisa.
+#
+# Referenciado por alertmanager.alertmanagerSpec.configSecret em
+# kube-prometheus-stack.values.yaml. A chave interna precisa se chamar
+# alertmanager.yaml: é o nome que o Prometheus Operator monta no pod, e um nome
+# diferente sobe um Alertmanager saudável sem rota nenhuma.
+apiVersion: v1
+kind: Secret
+metadata:
+  name: alertmanager-rota
+  namespace: observabilidade
+  labels:
+    app.kubernetes.io/part-of: observabilidade
+type: Opaque
+stringData:
+  alertmanager.yaml: |
+    global:
+      # Se a série do alerta some (Prometheus reiniciou, alvo sumiu), o Alertmanager
+      # considera resolvido depois disso. 5m é maior que qualquer scrape_interval daqui,
+      # então reinício de Prometheus não gera "resolvido" falso no celular.
+      resolve_timeout: 5m
+
+    time_intervals:
+      - name: madrugada
+        time_intervals:
+          - times:
+              - start_time: "01:00"
+                end_time: "07:00"
+            location: America/Sao_Paulo
+
+    route:
+      receiver: ntfy-aviso
+
+      # Agrupar por (alertname, namespace) e não por pod: um deploy ruim derruba oito
+      # pods e isso é um push, não oito. E não agrupar só por alertname porque
+      # namespaces diferentes são produtos diferentes com donos diferentes — juntar
+      # esconde qual deles quebrou atrás de um "+7 alertas".
+      group_by: ["alertname", "namespace"]
+
+      # 45s de espera junta o efeito cascata de um deploy num push só sem atrasar
+      # nada que importe.
+      group_wait: 45s
+      group_interval: 5m
+      repeat_interval: 12h
+
+      routes:
+        # Dead man's switch. O Watchdog é o alerta que o kube-prometheus-stack mantém
+        # sempre disparando; ele é a prova de que a cadeia inteira (Prometheus avalia,
+        # Alertmanager roteia, rede sai) está viva. Um serviço externo espera essa
+        # batida e me avisa quando ela PARA. É o único alerta que cobre "o nó morreu
+        # de verdade", porque nesse caso o Prometheus morre junto e nenhuma regra
+        # daqui sobra pra disparar.
+        - receiver: dead-man-switch
+          matchers:
+            - alertname = "Watchdog"
+          group_wait: 0s
+          group_interval: 5m
+          repeat_interval: 5m
+
+        # Alerta info não vai pro celular. Notificação que não pede ação é o
+        # treinamento mais eficiente que existe pra ignorar as que pedem.
+        - receiver: buraco-negro
+          matchers:
+            - severity = "info"
+
+        # Preview de PR tem rota própria antes das de severidade porque a pergunta que
+        # o alerta responde é "qual PR vai perder o ambiente", não "qual namespace".
+        # Agrupar por (repo, pr) mantém o número do PR visível na notificação.
+        # repeat de 15m dentro de uma janela de aviso de 30m: no máximo duas batidas,
+        # e a segunda chega quando ainda dá tempo de estender o ambiente.
+        - receiver: ntfy-preview
+          matchers:
+            - alertname =~ "PreviewAmbiente.*"
+          group_by: ["alertname", "repo", "pr"]
+          group_wait: 10s
+          group_interval: 5m
+          repeat_interval: 15m
+
+        # 1h de repeat pra crítico: menos que isso é insistência durante o próprio
+        # conserto, mais que isso é esquecer que ainda está quebrado. Nunca silenciado
+        # de madrugada — se não vale acordar, não é crítico e o severity está errado.
+        - receiver: ntfy-critico
+          matchers:
+            - severity = "critical"
+          group_wait: 30s
+          repeat_interval: 1h
+
+        # Aviso repete a cada 12h (uma vez de manhã, uma vez de noite). O que não foi
+        # resolvido em 12h virou tarefa, não incidente. Silenciado entre 01h e 07h:
+        # o que estiver firing às 02h chega às 07h, porque o Alertmanager não marca
+        # como notificado o que ele calou.
+        - receiver: ntfy-aviso
+          matchers:
+            - severity = "warning"
+          mute_time_intervals: ["madrugada"]
+          repeat_interval: 12h
+
+    inhibit_rules:
+      # 1. Crítico cala o aviso do mesmo assunto. Disco em 8% já me acordou; não
+      #    preciso do "disco enchendo" do mesmo mountpoint junto.
+      - source_matchers:
+          - severity = "critical"
+        target_matchers:
+          - severity = "warning"
+        equal: ["alertname", "namespace"]
+
+      # 2. A inibição que justifica o arquivo. Se o nó está NotReady, todo pod dele
+      #    está com problema — CrashLoop, Down, sem métrica, o que for. Sem esta regra
+      #    um nó caindo produz 40 notificações que descrevem 40 vezes o mesmo fato, e
+      #    o alerta que diz o que aconteceu (NoNotReady) chega enterrado no meio.
+      #    É a diferença entre alerta que se lê e alerta que se ignora.
+      #
+      #    Sem `equal:` de propósito: `equal` correlaciona origem e alvo por label
+      #    comum, e num cluster de um nó só não existe "alerta de outro nó" que
+      #    devesse sobreviver — tudo que está firing está firing por causa deste nó.
+      #    Num cluster com dois nós isso vira `equal: ["node"]` e os alvos passam a
+      #    precisar carregar o label `node`.
+      #
+      #    O próprio NoNotReady está excluído do alvo pelo matcher de alertname, e o
+      #    Watchdog escapa porque ele carrega severity=none.
+      - source_matchers:
+          - alertname = "NoNotReady"
+        target_matchers:
+          - severity =~ "critical|warning"
+          - alertname != "NoNotReady"
+
+      # 3. Disco quase cheio cala a previsão de disco enchendo do mesmo sistema de
+      #    arquivos. Um é a consequência do outro chegando ao fim.
+      - source_matchers:
+          - alertname = "DiscoDoNoQuaseCheio"
+        target_matchers:
+          - alertname = "DiscoDoNoEnchendo"
+        equal: ["instance", "mountpoint"]
+
+    receivers:
+      # webhook_configs manda o JSON cru do Alertmanager e não tem template. Apontado
+      # direto no ntfy, o celular recebe um blob de JSON com 3kB de labels — legível
+      # zero às 3h da manhã. A ponte (ntfy-alertmanager) traduz pra título + corpo +
+      # prioridade e é o que torna o push utilizável. O caminho da URL é o tópico ntfy.
+      #
+      # Fica em HTTP dentro do cluster: nenhum token de ntfy encosta no Git, e quem
+      # empurra pro celular é o servidor ntfy, não o Alertmanager.
+      - name: ntfy-critico
+        webhook_configs:
+          - url: http://ntfy-alertmanager.observabilidade.svc.cluster.local:8080/homelab-critico
+            send_resolved: true
+
+      - name: ntfy-aviso
+        webhook_configs:
+          - url: http://ntfy-alertmanager.observabilidade.svc.cluster.local:8080/homelab-aviso
+            send_resolved: true
+
+      - name: ntfy-preview
+        webhook_configs:
+          - url: http://ntfy-alertmanager.observabilidade.svc.cluster.local:8080/homelab-preview
+            send_resolved: true
+
+      # url_file e não url: a URL do snitch é o segredo que protege o alarme de último
+      # recurso. Montada de Secret por alertmanagerSpec.secrets.
+      # send_resolved false porque este destino só entende batida, não estado.
+      - name: dead-man-switch
+        webhook_configs:
+          - url_file: /etc/alertmanager/secrets/alertmanager-deadman/url
+            send_resolved: false
+
+      # Receiver sem destino nenhum. Existe pra que a rota de info seja explícita no
+      # arquivo em vez de virar um "por que isso nunca chega?" daqui a seis meses.
+      - name: buraco-negro
