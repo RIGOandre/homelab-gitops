@@ -29,7 +29,7 @@ spec:
       # Values de Helm e o dashboard cru não são manifestos: não têm kind e o
       # Argo CD recusaria o sync inteiro por causa deles. O dashboard entra
       # pelo .configmap.yaml gerado ao lado, esse sim um objeto de verdade.
-      exclude: "{*.values.yaml,*.json}"
+      exclude: "{*.values.yaml,*.json,*.py}"
   destination:
     server: https://kubernetes.default.svc
     namespace: observabilidade

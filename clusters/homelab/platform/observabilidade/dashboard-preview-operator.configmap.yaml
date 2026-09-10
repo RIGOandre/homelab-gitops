@@ -1,12 +1,11 @@
-# GERADO por hack/gerar-configmap-dashboard.py a partir de dashboard-preview-operator.json
-# Não edite este arquivo: edite o .json e rode `make dashboards`.
+# GERADO por hack/gerar-configmaps.py a partir de dashboard-preview-operator.json
+# Não edite este arquivo: edite a fonte e rode `make configmaps`.
 apiVersion: v1
 kind: ConfigMap
 metadata:
   name: dashboard-preview-operator
   namespace: observabilidade
   labels:
-    # É este rótulo que faz o sidecar do Grafana enxergar o painel.
     grafana_dashboard: "1"
     app.kubernetes.io/name: dashboard-preview-operator
 data:

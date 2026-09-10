@@ -140,19 +140,32 @@ jobs:
       - name: versões de chart existem
         run: python3 hack/conferir-versoes-de-chart.py
 
-  dashboards:
+  configmaps:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      # O ConfigMap do dashboard é gerado do .json ao lado. Editar um sem
-      # regerar o outro faz o painel do cluster divergir do painel do
+      # O ConfigMap do dashboard sai do .json e o da ponte sai do .py. Editar a
+      # fonte sem regerar faz o que roda no cluster divergir do que está no
       # repositório, e nenhuma validação de schema percebe: os dois arquivos
       # continuam válidos, só param de concordar.
-      - name: dashboard gerado está em dia
-        run: make validar-dashboards
+      - name: ConfigMap gerado está em dia
+        run: make validar-configmaps
+
+  ponte-ntfy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      # Sobe a ponte de verdade e um ntfy falso: é o único ponto do repositório
+      # onde um alerta é traduzido, e traduzir errado significa alerta que não
+      # se lê ou que não chega.
+      - name: a ponte traduz o alerta
+        run: python3 hack/testar-ponte-ntfy.py
 
   imagens:
     runs-on: ubuntu-latest

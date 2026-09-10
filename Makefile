@@ -19,8 +19,8 @@ PLANO         := $(DIR_TERRAFORM)/plano.tfplan
 NS_ARGOCD     := argocd
 
 .PHONY: ajuda validar validar-terraform validar-manifestos validar-scripts \
-        validar-segredos validar-dashboards conferir-versoes conferir-imagens \
-        dashboards plano aplicar bootstrap senha-argocd cifrar decifrar
+        validar-segredos validar-configmaps testar-ponte conferir-versoes \
+        conferir-imagens configmaps plano aplicar bootstrap senha-argocd cifrar decifrar
 
 ajuda: ## Lista os alvos
 	@grep -hE '^[a-z][a-z-]*:.*##' $(MAKEFILE_LIST) \
@@ -32,7 +32,7 @@ ajuda: ## Lista os alvos
 # Validação
 # --------------------------------------------------------------------------
 
-validar: validar-terraform validar-manifestos validar-scripts validar-segredos validar-dashboards ## Roda tudo que o CI roda sem rede
+validar: validar-terraform validar-manifestos validar-scripts validar-segredos validar-configmaps testar-ponte ## Roda tudo que o CI roda sem rede
 
 validar-terraform: ## terraform fmt -check e validate
 	@./hack/validar-terraform.sh
@@ -46,16 +46,21 @@ validar-scripts: ## bash -n e shellcheck nos scripts
 validar-segredos: ## Confere que nenhum segredo entrou em claro
 	@python3 hack/verificar-segredos.py .
 
-# O ConfigMap do dashboard é gerado do .json ao lado. Editar um sem regerar o
-# outro faz o painel do cluster divergir do painel do repositório, e nenhuma
-# validação de schema percebe: os dois arquivos continuam válidos, só param de
-# concordar.
-validar-dashboards: dashboards ## Falha se o ConfigMap do dashboard estiver defasado
-	@git diff --exit-code -- 'clusters/homelab/platform/observabilidade/*.configmap.yaml' \
-	  || { echo "dashboard gerado fora de dia: rode 'make dashboards' e commite"; exit 1; }
+# O ConfigMap do dashboard sai do .json, e o da ponte sai do .py. Editar a fonte
+# sem regerar faz o que roda no cluster divergir do que está no repositório, e
+# nenhuma validação de schema percebe: os dois arquivos continuam válidos, só
+# param de concordar.
+validar-configmaps: ## Falha se algum ConfigMap gerado estiver defasado
+	@python3 hack/gerar-configmaps.py --conferir
 
-dashboards: ## Regera os ConfigMap dos dashboards a partir dos .json
-	@python3 hack/gerar-configmap-dashboard.py
+configmaps: ## Regera os ConfigMap a partir dos .json e do .py
+	@python3 hack/gerar-configmaps.py
+
+# A ponte é o último trecho do caminho de um alerta. Se ela traduzir errado, o
+# alerta sai do Prometheus, passa pelo Alertmanager e morre no celular como um
+# blob ilegível. Nenhuma validação de YAML pega isso.
+testar-ponte: ## Sobe a ponte e um ntfy falso e confere a tradução
+	@python3 hack/testar-ponte-ntfy.py
 
 # Estes dois precisam de rede aberta e por isso não entram no `validar`: quem
 # roda na máquina de casa não deve levar CI vermelho por causa do provedor.

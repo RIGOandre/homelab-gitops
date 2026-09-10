@@ -114,7 +114,22 @@ está `NotReady`. Com o nó fora, quarenta avisos de CrashLoop não informam nad
 que o primeiro alerta já não tenha dito — e um canal que dispara quarenta vezes
 por incidente é um canal que se aprende a ignorar.
 
-O roteamento sai por webhook para o **ntfy**, no celular. Runbooks em
+O roteamento sai por webhook para o **ntfy**, no celular — passando por uma
+ponte de 120 linhas que mora aqui, em
+[`ponte-ntfy.py`](clusters/homelab/platform/observabilidade/ponte-ntfy.py). Ela
+existe porque o Alertmanager só sabe mandar o JSON dele e o ntfy trata o corpo
+do POST como o texto da notificação: apontar um no outro faz chegar um blob com
+chaves e colchetes.
+
+A primeira versão usava a imagem de um projeto de terceiro. O verificador de
+imagens do CI reprovou a tag — ela não existia — e o registry do projeto não
+respondia à listagem, então não havia como acertar sem chutar de novo. Ficou a
+tradução escrita à mão, só com biblioteca padrão, e um teste que sobe a ponte e
+um ntfy falso para conferir o que chega do outro lado. Foi ele que pegou o
+título saindo como `NÃ³ fora do ar`: cabeçalho HTTP é latin-1 por especificação
+e título em português não é.
+
+Runbooks em
 [`docs/runbooks/`](docs/runbooks/); molde de postmortem em
 [`docs/postmortems/`](docs/postmortems/) — vazio de propósito, porque
 postmortem de queda que não aconteceu é ficção.
@@ -160,7 +175,10 @@ que o cluster sobe. O que dá para afirmar:
 | `amtool check-config` e roteamento por severidade conferido alerta a alerta | passa |
 | `shellcheck` e `bash -n` nos scripts | passa |
 | Verificador de segredo em claro (`hack/verificar-segredos.py`) | passa, e reprova o caso negativo |
-| ConfigMap do dashboard em dia com o `.json` que o gera | passa |
+| ConfigMap gerados em dia com o `.json` e o `.py` que os geram | passa |
+| Ponte Alertmanager→ntfy, ponta a ponta contra um ntfy falso | 10 verificações |
+| Versões de chart fixadas existem nos repositórios de origem | **conferido no CI** |
+| Tags de imagem existem nos registries | **conferido no CI** |
 | `cloud-init.yaml` renderizado por `templatefile()` e reparseado | passa |
 
 O "zero pulados" é o número que mais custou. `kubeconform` só conhece os tipos
@@ -172,12 +190,12 @@ degrada e avisa; no CI, `EXIGIR_CATALOGO=1` torna a degradação uma falha.
 
 O que **não** está verificado, e você deve conferir antes do primeiro apply:
 
-- **As versões de chart e as tags de imagem.** Foram escritas à mão sem acesso
-  aos índices de chart nem aos registries. `hack/conferir-versoes-de-chart.py` e
-  `hack/conferir-imagens.sh` conferem as duas coisas e rodam no CI. O segundo
-  distingue "a tag não existe" de "não consegui falar com o registry": tratar os
-  dois como falha é como se ensina a ignorar o CI, e tratar os dois como sucesso
-  é como o erro passa.
+- **Os valores de Helm.** As versões de chart existem, mas nenhum `helm template`
+  foi renderizado contra elas: uma chave de values escrita errado é ignorada em
+  silêncio pelo chart, e o componente sobe saudável com a configuração padrão.
+  Foi assim que `alertmanager.configSecret` quase entrou no lugar de
+  `alertmanager.alertmanagerSpec.configSecret` — o Alertmanager teria subido
+  verde, com a rota padrão, e nenhum alerta chegaria no celular.
 - **O Vault não é instalado por este repositório.** O `ClusterSecretStore`
   aponta para `vault.vault.svc.cluster.local`, que precisa existir antes de
   qualquer `ExternalSecret` funcionar.
