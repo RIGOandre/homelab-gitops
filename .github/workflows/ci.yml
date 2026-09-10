@@ -1,0 +1,166 @@
+# Verificações que rodam em todo PR.
+#
+# Cada job chama um script de hack/, e não uma lista de comandos escrita aqui.
+# É a única forma de "o CI está vermelho" ser depurável: `make validar` na
+# estação roda exatamente estes mesmos scripts.
+#
+# Nenhum job precisa da chave age. Isso é de propósito: o CI confere que os
+# segredos estão cifrados, e para isso não precisa saber decifrá-los. Um CI que
+# decifra é um CI que vale a pena atacar.
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# Push seguido em cima do mesmo PR cancela a execução anterior. Sem isto, um
+# branch com cinco commits ocupa a fila com quatro resultados que ninguém vai ler.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  terraform:
+    name: terraform
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          # Mesma versão do required_version em terraform/versions.tf. Versão
+          # diferente reescreve o formato do state e a máquina que ficou para
+          # trás não lê mais o arquivo.
+          terraform_version: 1.9.8
+          # O wrapper da action embrulha o binário para capturar a saída, e isso
+          # atrapalha script que lê stdout ou confere código de saída.
+          terraform_wrapper: false
+
+      - name: fmt e validate
+        run: ./hack/validar-terraform.sh
+
+  manifestos:
+    name: manifestos
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: instalar kubeconform
+        run: |
+          set -euo pipefail
+          versao=v0.6.7
+          # Soma conferida: o job baixa um binário e roda. Sem a conferência,
+          # um release trocado no meio do caminho executa com o token do job.
+          soma=95f14e87aa28c09d5941f11bd024c1d02fdc0303ccaa23f61cef67bc92619d73
+          url="https://github.com/yannh/kubeconform/releases/download/${versao}/kubeconform-linux-amd64.tar.gz"
+          curl -sSfL -o kubeconform.tar.gz "${url}"
+          echo "${soma}  kubeconform.tar.gz" | sha256sum -c -
+          sudo tar -xzf kubeconform.tar.gz -C /usr/local/bin kubeconform
+          rm kubeconform.tar.gz
+          kubeconform -v
+
+      # O script roda kubeconform em -strict com -ignore-missing-schemas.
+      #
+      # O que isso deixa passar, sem meias palavras: todo recurso de CRD
+      # (Application do Argo CD, PrometheusRule e ServiceMonitor do Prometheus
+      # Operator, ClusterIssuer do cert-manager, ExternalSecret e
+      # ClusterSecretStore do External Secrets) é PULADO, não validado. Hoje são
+      # 17 dos 20 recursos de clusters/. Na prática, este job valida os três
+      # objetos da API padrão e confere que o resto é YAML.
+      #
+      # Sem -ignore-missing-schemas o job seria vermelho sempre, porque esses
+      # schemas não existem no store público. A alternativa honesta seria extrair
+      # os schemas das CRDs instaladas e apontar -schema-location para eles; é o
+      # próximo passo, e não está feito.
+      #
+      # A trava contra o pior efeito colateral está no script: ele reprova se
+      # aparecer um kind sem schema que não esteja na lista conhecida, porque
+      # senão `kind: Sercret` seria "pulado" em silêncio em vez de reprovado.
+      - name: kubeconform
+        env:
+          # No runner a rede é aberta: catálogo inacessível aqui é falha, não
+          # motivo para degradar em silêncio e pular metade dos manifestos.
+          EXIGIR_CATALOGO: "1"
+        run: ./hack/validar-manifestos.sh
+
+  scripts:
+    name: scripts
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # shellcheck já vem no runner do ubuntu. EXIGIR_SHELLCHECK=1 faz o script
+      # reprovar se ele sumir: job verde que não rodou a ferramenta é pior do
+      # que job nenhum.
+      - name: bash -n e shellcheck
+        env:
+          EXIGIR_SHELLCHECK: "1"
+        run: ./hack/validar-scripts.sh
+
+  segredos:
+    name: segredos
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - run: pip install --disable-pip-version-check pyyaml==6.0.2
+
+      # Confere a árvore do commit, não o histórico. Segredo que já foi commitado
+      # e depois removido continua no histórico e este job não vê - nesse caso o
+      # conserto é rotacionar a credencial, não reescrever o Git.
+      - name: nenhum segredo em claro
+        run: python3 hack/verificar-segredos.py .
+
+  versoes-de-chart:
+    name: versoes de chart
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: azure/setup-helm@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - run: pip install --disable-pip-version-check pyyaml==6.0.2
+
+      # Depende da rede: consulta o repositório de cada chart. É o único job que
+      # pode ficar vermelho por motivo que não está no PR - repositório de chart
+      # fora do ar. Quando isso acontecer, é para reexecutar, não para investigar
+      # o diff.
+      - name: versões de chart existem
+        run: python3 hack/conferir-versoes-de-chart.py
+
+  dashboards:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      # O ConfigMap do dashboard é gerado do .json ao lado. Editar um sem
+      # regerar o outro faz o painel do cluster divergir do painel do
+      # repositório, e nenhuma validação de schema percebe: os dois arquivos
+      # continuam válidos, só param de concordar.
+      - name: dashboard gerado está em dia
+        run: make validar-dashboards
+
+  imagens:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # Aqui a rede é aberta, então inconclusivo conta como falha: um registry
+      # que não responde no CI é problema de verdade, não ruído local.
+      - name: as tags de imagem existem
+        env:
+          EXIGIR_CONFERENCIA: "1"
+        run: ./hack/conferir-imagens.sh

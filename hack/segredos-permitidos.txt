@@ -1,0 +1,15 @@
+# Arquivos que são `kind: Secret` por exigência de outro componente, não porque
+# carregam credencial. Um por linha, caminho relativo à raiz do repositório, com
+# o motivo ao lado.
+#
+# Entrar aqui NÃO desliga a verificação: o arquivo continua sendo lido em busca
+# de coisa com cara de credencial (senha/token/chave PEM/URL com usuário e
+# senha). O que a lista suspende é só a regra "Secret com data em claro".
+#
+# Caminho que não existe mais reprova o CI. É de propósito: exceção esquecida é
+# como um Secret de verdade acaba entrando por baixo dela.
+#
+# Antes de acrescentar uma linha aqui, pergunte se o valor não deveria estar no
+# Vault. Quase sempre deveria.
+
+clusters/homelab/platform/observabilidade/alertmanager-rota.yaml  # rota do Alertmanager; o Prometheus Operator só aceita a config via Secret (alertmanager.configSecret). Os webhooks são HTTP interno sem token e a URL do dead man's switch entra por url_file, de outro Secret montado.
