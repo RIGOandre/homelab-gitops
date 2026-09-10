@@ -1,0 +1,221 @@
+#cloud-config
+#
+# Provisionamento de dia 1 do nó do k3s.
+#
+# Este arquivo é lido pelo Terraform com templatefile(), não é entregue cru para
+# a Hetzner: as marcações de cifrão com chaves são variáveis do Terraform, não
+# do shell. Expansão de shell, quando precisa existir, tem que dobrar o cifrão
+# para o Terraform não resolver antes. Por isso os scripts daqui evitam
+# variável de shell entre chaves e usam a forma sem chaves.
+#
+# Escopo: usuário, SSH, k3s e nada além disso. Tudo que muda depois do primeiro
+# boot é manifesto no Git reconciliado pelo Argo CD. Mexer neste arquivo recria
+# o servidor, então ele não serve para ajuste do dia a dia.
+
+hostname: ${nome_servidor}
+fqdn: ${nome_servidor}.${dominio}
+manage_etc_hosts: true
+
+# UTC no nó, não America/Sao_Paulo. Log de provedor, métrica do Prometheus e
+# carimbo de evento do Kubernetes são todos UTC; manter o servidor em horário
+# local significa converter cabeça toda vez que se correlaciona incidente.
+timezone: Etc/UTC
+
+users:
+  - name: ${usuario_admin}
+    gecos: Administrador do cluster
+    shell: /bin/bash
+    groups: [sudo]
+    # sudo sem senha porque a conta não tem senha nenhuma: entrada é só por
+    # chave. Pedir senha aqui daria um prompt que ninguém consegue responder.
+    sudo: "ALL=(ALL) NOPASSWD:ALL"
+    lock_passwd: true
+    ssh_authorized_keys:
+      - "${chave_ssh_publica}"
+
+disable_root: true
+ssh_pwauth: false
+
+# Só chave de host ed25519. A chave RSA gerada por padrão é mais uma coisa para
+# manter e não é usada por nenhum cliente relevante desde 2018.
+ssh_genkeytypes: [ed25519]
+
+package_update: true
+package_upgrade: true
+
+packages:
+  - fail2ban
+  - unattended-upgrades
+  - ca-certificates
+  - curl
+  - gnupg
+
+write_files:
+  # O sshd do Ubuntu 24.04 inclui sshd_config.d/*.conf no topo do arquivo e vale
+  # o primeiro valor encontrado, não o último. O prefixo 10- garante que este
+  # arquivo seja lido antes do 50-cloud-init.conf que o próprio cloud-init
+  # escreve.
+  - path: /etc/ssh/sshd_config.d/10-endurecimento.conf
+    owner: root:root
+    permissions: "0644"
+    content: |
+      PermitRootLogin no
+      PasswordAuthentication no
+      KbdInteractiveAuthentication no
+      PermitEmptyPasswords no
+      PubkeyAuthentication yes
+      AuthenticationMethods publickey
+
+      # Só o usuário administrativo entra. Conta de serviço criada por pacote
+      # (o k3s cria algumas) não deve ter caminho de login.
+      AllowUsers ${usuario_admin}
+
+      MaxAuthTries 3
+      LoginGraceTime 20
+
+      X11Forwarding no
+      AllowAgentForwarding no
+
+      # Encaminhamento de porta fica ligado, e é obrigatório: a porta 6443 não
+      # está aberta no firewall da Hetzner, então o acesso à API do k3s é por
+      # túnel SSH (ssh -N -L 6443:127.0.0.1:6443). Desligar isto tranca o
+      # cluster junto.
+      AllowTcpForwarding yes
+
+      ClientAliveInterval 300
+      ClientAliveCountMax 2
+
+  # O firewall da Hetzner já limita a porta 22 a uma lista de IPs, então o
+  # fail2ban aqui não é a primeira barreira. Ele existe para o dia em que a
+  # lista crescer, e para deixar registro do que tentou entrar.
+  #
+  # Ele não conflita com as regras do kube-proxy: cria cadeia própria e só
+  # insere endereço banido dentro dela, sem tocar na política padrão das
+  # cadeias que o Kubernetes gerencia.
+  - path: /etc/fail2ban/jail.d/sshd.local
+    owner: root:root
+    permissions: "0644"
+    content: |
+      [sshd]
+      enabled  = true
+      backend  = systemd
+      mode     = aggressive
+      maxretry = 3
+      findtime = 10m
+      bantime  = 1h
+
+  # O padrão do Ubuntu é 128 instâncias de inotify por usuário. Kubelet,
+  # containerd e o Argo CD abrem watch por arquivo e estouram esse limite com
+  # umas poucas dezenas de pods. O sintoma é "too many open files" em um
+  # componente que não tem nada a ver com o que quebrou.
+  - path: /etc/sysctl.d/90-inotify-kubernetes.conf
+    owner: root:root
+    permissions: "0644"
+    content: |
+      fs.inotify.max_user_instances = 512
+      fs.inotify.max_user_watches   = 524288
+
+  # Atualização de segurança entra sozinha; reinício não. O cluster tem um nó
+  # só: reiniciar de madrugada sem ninguém olhando derruba tudo que ele serve.
+  # O reinício é manual, quando /var/run/reboot-required aparecer.
+  #
+  # Arquivo com nome próprio em vez de sobrescrever o 20auto-upgrades: aquele é
+  # conffile do pacote unattended-upgrades e escrever nele antes da instalação
+  # cria conflito de dpkg. Como o apt lê o diretório em ordem, o 51- vale.
+  - path: /etc/apt/apt.conf.d/51-homelab-atualizacao
+    owner: root:root
+    permissions: "0644"
+    content: |
+      APT::Periodic::Update-Package-Lists "1";
+      APT::Periodic::Unattended-Upgrade "1";
+      Unattended-Upgrade::Automatic-Reboot "false";
+
+  # O k3s reescreve /etc/rancher/k3s/k3s.yaml a cada partida, com dono root e
+  # modo 0600. Afrouxar esse modo deixaria credencial de cluster-admin legível
+  # para todo processo da máquina. A cópia para o home do usuário é feita por
+  # este script, que roda a cada boot depois do k3s: assim o certificado de
+  # cliente renovado pelo k3s aparece na cópia sem intervenção.
+  - path: /usr/local/sbin/kubeconfig-usuario.sh
+    owner: root:root
+    permissions: "0750"
+    content: |
+      #!/bin/sh
+      set -eu
+
+      tentativas=0
+      while [ ! -s /etc/rancher/k3s/k3s.yaml ]; do
+        tentativas=$((tentativas + 1))
+        if [ "$tentativas" -gt 60 ]; then
+          echo "k3s.yaml nao apareceu em 120s" >&2
+          exit 1
+        fi
+        sleep 2
+      done
+
+      install -d -o ${usuario_admin} -g ${usuario_admin} -m 0700 /home/${usuario_admin}/.kube
+      install -o ${usuario_admin} -g ${usuario_admin} -m 0600 \
+        /etc/rancher/k3s/k3s.yaml /home/${usuario_admin}/.kube/config
+
+  - path: /etc/systemd/system/kubeconfig-usuario.service
+    owner: root:root
+    permissions: "0644"
+    content: |
+      [Unit]
+      Description=Copia o kubeconfig do k3s para o usuario administrativo
+      After=k3s.service
+      Requires=k3s.service
+
+      [Service]
+      Type=oneshot
+      RemainAfterExit=yes
+      ExecStart=/usr/local/sbin/kubeconfig-usuario.sh
+
+      [Install]
+      WantedBy=multi-user.target
+
+  - path: /etc/profile.d/kubeconfig.sh
+    owner: root:root
+    permissions: "0644"
+    content: |
+      export KUBECONFIG="$HOME/.kube/config"
+
+runcmd:
+  - [sysctl, --system]
+  - [systemctl, restart, ssh]
+  - [systemctl, enable, --now, fail2ban]
+
+  # Instalação do k3s.
+  #
+  # É curl para sh, com o que isso tem de ruim. O que compensa em parte: vem por
+  # HTTPS de get.k3s.io e a versão é exata, então o resultado é reproduzível. A
+  # alternativa é empacotar o binário e a unidade do systemd neste repositório,
+  # o que passa a exigir manutenção a cada versão nova. Quando o cluster tiver
+  # mais de um nó, muda.
+  #
+  # --disable=traefik
+  #   O k3s não instala o traefik como pacote, ele cria um CRD HelmChart que o
+  #   próprio k3s reconcilia. Isso põe um componente de plataforma com estado
+  #   desejado morando no disco do nó em vez do Git, e ele volta sozinho se for
+  #   apagado à mão. O ingress deste cluster é o ingress-nginx, entregue pelo
+  #   Argo CD como qualquer outra aplicação, com versão fixada em manifesto
+  #   versionado e diff visível antes de aplicar.
+  #
+  # --disable=servicelb
+  #   O servicelb (klipper) atende Service do tipo LoadBalancer abrindo hostPort
+  #   80 e 443 no nó. Como o ingress-nginx aqui já sobe ocupando essas portas
+  #   direto no nó, o klipper só disputaria as mesmas portas. Um balanceador de
+  #   verdade seria um Load Balancer da Hetzner, custo fixo mensal a mais para
+  #   um cluster de um nó.
+  #
+  # O certificado da API já traz 127.0.0.1 como SAN por padrão, que é o nome
+  # usado do outro lado do túnel SSH. Nenhum --tls-san extra é necessário.
+  - >-
+    curl -sfL https://get.k3s.io
+    | INSTALL_K3S_VERSION="${versao_k3s}"
+    INSTALL_K3S_EXEC="server --disable=traefik --disable=servicelb --write-kubeconfig-mode=0600 --node-name=${nome_servidor}"
+    sh -s -
+
+  - [systemctl, daemon-reload]
+  - [systemctl, enable, --now, kubeconfig-usuario.service]
+
+final_message: "cloud-init concluido em $uptime segundos. k3s ${versao_k3s} instalado; kubeconfig em /home/${usuario_admin}/.kube/config."
