@@ -1,0 +1,57 @@
+# Application raiz do padrão app-of-apps.
+#
+# Ele não instala nada por conta própria: aponta para clusters/homelab/apps/,
+# onde cada arquivo é um Application de um componente da plataforma. Assim o
+# instalar.sh precisa aplicar um único objeto, e todo o resto entra pelo Git.
+#
+# A raiz mora em bootstrap/argocd/ e não em clusters/homelab/apps/ de propósito:
+# se ela estivesse dentro do diretório que ela mesma varre, um sync com prune
+# poderia removê-la e deixar o cluster órfão em caso de erro de caminho.
+#
+# Ordem das sync waves usada pelos filhos (o porquê está em cada Application):
+#   0  argocd                 - o gerenciador precisa estar são antes dos gerenciados
+#   1  cert-manager, external-secrets, kube-prometheus-stack - donos de CRD
+#   2  ingress-nginx          - consome ServiceMonitor e precede o solver HTTP-01
+#   3  platform-rede, platform-secrets - manifests que usam as CRDs da wave 1
+#   4  loki                   - destino dos logs
+#   5  alloy                  - só faz sentido com o loki de pé
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: raiz
+  namespace: argocd
+  finalizers:
+    # Cascade delete: apagar a raiz apaga os Applications filhos e, por tabela,
+    # tudo que eles criaram. É destrutivo de propósito - sem o finalizer, um
+    # "kubectl delete application raiz" deixaria a plataforma inteira órfã,
+    # rodando no cluster e sem ninguém reconciliando.
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/RIGOandre/Homelab_GitOps.git
+    targetRevision: main
+    path: clusters/homelab/apps
+    directory:
+      # Sem recursão: só os Applications no primeiro nível. Qualquer subpasta
+      # criada ali por engano fica invisível em vez de virar sync silencioso.
+      recurse: false
+      include: "*.yaml"
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: argocd
+  syncPolicy:
+    automated:
+      # prune remove o Application quando o arquivo sai do Git; selfHeal desfaz
+      # kubectl edit feito na pressa. Os dois juntos são o que faz o Git valer
+      # como fonte da verdade em vez de sugestão.
+      prune: true
+      selfHeal: true
+    retry:
+      # O repo-server ainda está subindo nos primeiros segundos pós-bootstrap:
+      # sem retry o primeiro sync falha e fica esperando o resync de 3 minutos.
+      limit: 5
+      backoff:
+        duration: 15s
+        factor: 2
+        maxDuration: 3m

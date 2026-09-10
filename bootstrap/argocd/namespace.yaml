@@ -1,0 +1,12 @@
+# Este namespace é o único objeto do cluster que fica fora do Git para todos os
+# efeitos práticos: ele precisa existir antes do Argo CD, e o Argo CD é quem
+# aplica o resto do repositório. Se ele fosse gerenciado por um Application,
+# o Argo CD dependeria de si mesmo para nascer.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: argocd
+  labels:
+    # Marca o namespace como parte da plataforma para as NetworkPolicies e para
+    # os filtros de dashboard não misturarem infraestrutura com carga de trabalho.
+    parte-de: plataforma
