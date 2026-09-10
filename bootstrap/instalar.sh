@@ -29,7 +29,11 @@ readonly ARQUIVO_CHAVE_AGE="${SOPS_AGE_KEY_FILE:-${HOME}/.config/sops/age/keys.t
 # Caminho resolvido a partir do próprio arquivo: o script é chamado tanto da raiz
 # do repositório quanto de dentro de bootstrap/, e caminho relativo quebraria num
 # dos dois casos.
-readonly DIRETORIO="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# Declarado e atribuído em linhas separadas: com `readonly X="$(cmd)"` o status
+# de saída do subshell é o do readonly, sempre zero, e um cd que falhou passaria
+# despercebido levando o script a operar no diretório errado.
+DIRETORIO="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+readonly DIRETORIO
 
 log() {
   printf '==> %s\n' "$*"

@@ -40,6 +40,56 @@ if [[ ${#imagens[@]} -eq 0 ]]; then
   exit 1
 fi
 
+# Quando a tag não existe, dizer só "não existe" obriga quem lê a ir procurar as
+# tags à mão — e chutar de novo. Aqui o registry é consultado direto (v2 API,
+# com o fluxo de token anônimo que ghcr, quay, Docker Hub e Gitea usam) e as
+# últimas tags publicadas saem no log, ao lado do erro.
+listar_tags() {
+  local imagem="$1"
+  local sem_tag="${imagem%:*}"
+  local registro="${sem_tag%%/*}"
+  local repo="${sem_tag#*/}"
+  local desafio realm servico token
+
+  desafio=$(curl -sSI --max-time 20 "https://${registro}/v2/" 2>/dev/null | tr -d '\r' | grep -i '^www-authenticate:' || true)
+  if [[ -n "${desafio}" ]]; then
+    realm=$(sed -n 's/.*realm="\([^"]*\)".*/\1/p' <<<"${desafio}")
+    servico=$(sed -n 's/.*service="\([^"]*\)".*/\1/p' <<<"${desafio}")
+    if [[ -n "${realm}" ]]; then
+      token=$(curl -sS --max-time 20 "${realm}?service=${servico}&scope=repository:${repo}:pull" 2>/dev/null |
+                python3 -c 'import json,sys; d=json.load(sys.stdin); print(d.get("token") or d.get("access_token") or "")' 2>/dev/null || true)
+    fi
+  fi
+
+  # Nem todo caminho até o registry devolve o desafio 401: proxy corporativo
+  # costuma responder 405 ao GET em /v2/ e engolir o www-authenticate. O
+  # endpoint /token com escopo de pull é a convenção que ghcr, quay e Docker Hub
+  # seguem, então vale tentar mesmo sem o desafio.
+  if [[ -z "${token:-}" ]]; then
+    token=$(curl -sS --max-time 20 "https://${registro}/token?service=${registro}&scope=repository:${repo}:pull" 2>/dev/null |
+              python3 -c 'import json,sys; d=json.load(sys.stdin); print(d.get("token") or d.get("access_token") or "")' 2>/dev/null || true)
+  fi
+
+  local resposta
+  if [[ -n "${token:-}" ]]; then
+    resposta=$(curl -sS --max-time 25 -H "Authorization: Bearer ${token}" "https://${registro}/v2/${repo}/tags/list" 2>/dev/null || true)
+  else
+    resposta=$(curl -sS --max-time 25 "https://${registro}/v2/${repo}/tags/list" 2>/dev/null || true)
+  fi
+
+  python3 -c '
+import json, sys
+try:
+    tags = json.loads(sys.argv[1]).get("tags") or []
+except Exception:
+    tags = []
+if tags:
+    print("               tags publicadas (últimas 12): " + ", ".join(tags[-12:]))
+else:
+    print("               não consegui listar as tags deste repositório.")
+' "${resposta}" 2>/dev/null || echo "               não consegui listar as tags deste repositório."
+}
+
 falhas=0
 inconclusivos=0
 
@@ -61,6 +111,7 @@ for imagem in "${imagens[@]}"; do
   # O registry respondeu e disse que não tem: é erro de verdade.
   if grep -qiE 'manifest unknown|not found|no such manifest|manifest for .* not found' <<<"$erro"; then
     printf 'NÃO EXISTE     %s\n' "$imagem"
+    listar_tags "$imagem"
     falhas=$((falhas + 1))
   else
     # Rede, proxy, autenticação, timeout. Não é sobre a tag.
