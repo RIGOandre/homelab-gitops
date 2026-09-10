@@ -23,7 +23,7 @@ bootstrap/instalar.sh    Argo CD, uma vez, e o Application raiz
 
 ---
 
-## Por que não é só um `kubectl apply`
+## Não é só um `kubectl apply`
 
 Um cluster mantido por comando some da memória em duas semanas. Não existe
 resposta para "por que essa flag está aí" nem para "o que mudou entre ontem e
@@ -44,7 +44,7 @@ qualquer mudança urgente passa por commit.
 
 ---
 
-## Do zero ao cluster
+## cluster
 
 O caminho completo está em [`docs/bootstrap.md`](docs/bootstrap.md). Em resumo:
 
@@ -93,7 +93,7 @@ para sempre.
 
 ---
 
-## Alertar é a parte que importa
+## Alerta
 
 Instalar Prometheus é a parte fácil. O que separa um cluster observado de um
 cluster com Grafana instalado são **15 regras de alerta**, cada uma com o
