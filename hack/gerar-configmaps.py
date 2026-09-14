@@ -49,7 +49,8 @@ def gerar_dashboard(caminho: str) -> str:
     nome = pathlib.Path(caminho).stem
     # Reserializa com indentação fixa: assim o gerado só muda quando o conteúdo
     # muda, e não quando o Grafana exporta com espaçamento diferente.
-    corpo = json.dumps(json.load(open(caminho)), indent=2, ensure_ascii=False)
+    with open(caminho, encoding="utf-8") as fh:
+        corpo = json.dumps(json.load(fh), indent=2, ensure_ascii=False)
     return envelope(
         nome,
         f"{nome}.json",
@@ -64,7 +65,7 @@ def gerar_ponte(caminho: str) -> str:
     return envelope(
         "ntfy-alertmanager",
         "ponte.py",
-        pathlib.Path(caminho).read_text(),
+        pathlib.Path(caminho).read_text(encoding="utf-8"),
         {"app.kubernetes.io/name": "ntfy-alertmanager"},
         pathlib.Path(caminho).name,
     )
@@ -97,18 +98,23 @@ def main() -> int:
         print(f"nada para gerar em {DIRETORIO}", file=sys.stderr)
         return 1
 
+    # Toda leitura e escrita fixa utf-8 e fim de linha. Sem isso o Python segue
+    # a codificação da máquina - cp1252 no Windows -, e o mesmo repositório
+    # produz dois ConfigMap diferentes: o --conferir acusa defasagem que não
+    # existe, e uma geração de verdade grava os acentos do dashboard e da
+    # ponte com os bytes errados dentro do que vai para o cluster.
     defasados = []
     for destino, conteudo in pares:
         arquivo = pathlib.Path(destino)
         if args.conferir:
-            atual = arquivo.read_text() if arquivo.exists() else None
+            atual = arquivo.read_text(encoding="utf-8") if arquivo.exists() else None
             if atual != conteudo:
                 defasados.append(destino)
                 print(f"defasado  {destino}")
             else:
                 print(f"em dia    {destino}")
             continue
-        arquivo.write_text(conteudo)
+        arquivo.write_text(conteudo, encoding="utf-8", newline="\n")
         print(destino)
 
     if defasados:

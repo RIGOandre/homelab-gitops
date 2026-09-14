@@ -64,6 +64,16 @@ class Resultado:
         self.avisos.append((caminho, motivo))
 
 
+def normalizar(caminho):
+    """Caminho relativo com barra normal, independente do sistema de arquivos.
+
+    A lista de exceções é escrita com barra normal, e no Windows o os.path.relpath
+    devolve barra invertida: sem esta normalização a exceção nunca casa e o
+    verificador reprova em claro um Secret que ele mesmo já tinha liberado.
+    """
+    return caminho.replace(os.sep, "/")
+
+
 def ler_permitidos(raiz, res):
     """Lê a lista de exceções. Entrada apontando para arquivo que sumiu reprova."""
     caminho = os.path.join(raiz, ARQUIVO_PERMITIDOS)
@@ -75,7 +85,7 @@ def ler_permitidos(raiz, res):
             linha = linha.split("#", 1)[0].strip()
             if not linha:
                 continue
-            permitidos.add(linha)
+            permitidos.add(normalizar(linha))
             if not os.path.exists(os.path.join(raiz, linha)):
                 res.falhar(
                     ARQUIVO_PERMITIDOS,
@@ -201,7 +211,7 @@ def main(argv):
     permitidos = ler_permitidos(raiz, res)
 
     for caminho in caminhar(raiz):
-        rel = os.path.relpath(caminho, raiz)
+        rel = normalizar(os.path.relpath(caminho, raiz))
         texto = ler_texto(caminho)
         if texto is None:
             continue
