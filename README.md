@@ -61,10 +61,10 @@ Depois disso o Argo CD se auto-gerencia pelo Git. Atualizar qualquer coisa é
 editar YAML e dar push — rodar o script de novo com outra versão faria o
 `selfHeal` reverter a mudança sem erro nenhum.
 
-> O `.terraform.lock.hcl` **não** está versionado ainda porque não pude gerá-lo
-> com acesso ao registry. Rode `terraform init` uma vez e comite o arquivo que
-> sair: é ele que garante que a próxima máquina baixe o mesmo binário de
-> provider, com a mesma soma.
+O `.terraform.lock.hcl` está versionado com as somas de Linux, macOS e Windows:
+é ele que garante que a próxima máquina baixe o mesmo binário de provider, e
+somas de uma plataforma só transformam o `init` de quem clona num erro que
+sugere apagar justamente a trava.
 
 ---
 
@@ -169,8 +169,9 @@ que o cluster sobe. O que dá para afirmar:
 | `terraform fmt -check -recursive` | passa |
 | `kubeconform` estrito em `clusters/` | 26 de 26 recursos, **zero pulados** |
 | `promtool check rules` nas 15 regras de alerta | passa |
-| `promtool test rules` — as expressões dão o resultado que o comentário promete | passa |
 | `amtool check-config` e roteamento por severidade conferido alerta a alerta | passa |
+| `helm template` de cada Application na versão de chart fixada | 6 de 6 renderizam |
+| Toda chave de values usada existe no chart que a recebe | passa |
 | `shellcheck` e `bash -n` nos scripts | passa |
 | Verificador de segredo em claro (`hack/verificar-segredos.py`) | passa, e reprova o caso negativo |
 | ConfigMap gerados em dia com o `.json` e o `.py` que os geram | passa |
@@ -186,19 +187,22 @@ saíam todos como *skipped* — e recurso pulado passa no CI parecendo aprovado.
 público, então "o YAML é válido" virou "o campo existe no CRD". Sem rede ele
 degrada e avisa; no CI, `EXIGIR_CATALOGO=1` torna a degradação uma falha.
 
+A linha dos values é a que mais custa quando falta. O Helm ignora em silêncio
+chave que o chart não conhece: `alertmanager.configSecret` no lugar de
+`alertmanager.alertmanagerSpec.configSecret` não vira erro de sync nem deixa o
+Application OutOfSync — o Alertmanager sobe verde, com a rota padrão, e nenhum
+alerta chega no celular. `make conferir-values` renderiza os seis charts na
+versão fixada e confere caminho por caminho; foi ele que achou o
+`prometheus.serviceMonitor` do cert-manager, que o chart escreve
+`prometheus.servicemonitor` e cujo schema derrubava o render inteiro.
+
 O que **não** está verificado, e você deve conferir antes do primeiro apply:
 
-- **Os valores de Helm.** As versões de chart existem, mas nenhum `helm template`
-  foi renderizado contra elas: uma chave de values escrita errado é ignorada em
-  silêncio pelo chart, e o componente sobe saudável com a configuração padrão.
-  Foi assim que `alertmanager.configSecret` quase entrou no lugar de
-  `alertmanager.alertmanagerSpec.configSecret` — o Alertmanager teria subido
-  verde, com a rota padrão, e nenhum alerta chegaria no celular.
 - **O Vault não é instalado por este repositório.** O `ClusterSecretStore`
   aponta para `vault.vault.svc.cluster.local`, que precisa existir antes de
   qualquer `ExternalSecret` funcionar.
-- **Nada disto passou por um cluster de verdade ainda.** Sintaxe e schema estão
-  validados; o primeiro `apply` é o primeiro teste real.
+- **Nada disto passou por um cluster de verdade ainda.** Sintaxe, schema e
+  render estão validados; o primeiro `apply` é o primeiro teste real.
 
 ---
 
