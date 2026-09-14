@@ -27,7 +27,11 @@ spec:
         replicaCount: 1
         prometheus:
           enabled: true
-          serviceMonitor:
+          # `servicemonitor`, tudo minúsculo: é assim que o chart do cert-manager
+          # escreve, ao contrário de quase todos os outros. O values.schema.json
+          # dele recusa propriedade desconhecida, então `serviceMonitor` não era
+          # ignorado em silêncio - derrubava o render inteiro, e com ele o sync.
+          servicemonitor:
             # kube-prometheus-stack está na mesma wave, então a CRD ServiceMonitor
             # pode ainda não existir quando este sync roda. Fica desligado até que
             # a coleta de métricas do cert-manager valha o acoplamento de ordem.
