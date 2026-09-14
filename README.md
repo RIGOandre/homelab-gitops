@@ -1,7 +1,7 @@
 # homelab-gitops
 Cluster **k3s de nó único** provisionado por Terraform e reconciliado por Argo
-CD. Hospeda os produtos que eu mantenho, e é onde eu opero — não onde eu
-instalo.
+CD. É onde os produtos que eu mantenho vão rodar, e o repositório é escrito
+para operar — não para instalar uma vez e esquecer.
 O repositório é a fonte da verdade: `terraform apply` cria o servidor, um
 script coloca o Argo CD de pé uma única vez, e a partir daí **mudar o cluster é
 abrir um pull request**. Nada aqui é aplicado na mão depois do dia 1.
