@@ -63,23 +63,16 @@ jobs:
           rm kubeconform.tar.gz
           kubeconform -v
 
-      # O script roda kubeconform em -strict com -ignore-missing-schemas.
+      # O script roda kubeconform em -strict, resolvendo os schemas de CRD no
+      # catálogo público. É o que separa "o YAML é válido" de "o campo existe no
+      # CRD": sem o catálogo, Application, PrometheusRule, ClusterIssuer e
+      # ExternalSecret sairiam pulados, e recurso pulado passa parecendo
+      # aprovado.
       #
-      # O que isso deixa passar, sem meias palavras: todo recurso de CRD
-      # (Application do Argo CD, PrometheusRule e ServiceMonitor do Prometheus
-      # Operator, ClusterIssuer do cert-manager, ExternalSecret e
-      # ClusterSecretStore do External Secrets) é PULADO, não validado. Hoje são
-      # 17 dos 20 recursos de clusters/. Na prática, este job valida os três
-      # objetos da API padrão e confere que o resto é YAML.
-      #
-      # Sem -ignore-missing-schemas o job seria vermelho sempre, porque esses
-      # schemas não existem no store público. A alternativa honesta seria extrair
-      # os schemas das CRDs instaladas e apontar -schema-location para eles; é o
-      # próximo passo, e não está feito.
-      #
-      # A trava contra o pior efeito colateral está no script: ele reprova se
-      # aparecer um kind sem schema que não esteja na lista conhecida, porque
-      # senão `kind: Sercret` seria "pulado" em silêncio em vez de reprovado.
+      # A trava contra o pior efeito colateral do -ignore-missing-schemas está no
+      # script: ele reprova se aparecer um kind sem schema que não esteja na
+      # lista conhecida, porque senão `kind: Sercret` seria "pulado" em silêncio
+      # em vez de reprovado.
       - name: kubeconform
         env:
           # No runner a rede é aberta: catálogo inacessível aqui é falha, não
