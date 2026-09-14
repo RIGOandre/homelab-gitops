@@ -95,6 +95,20 @@ def main() -> int:
                     "labels": {"alertname": "DiscoDoNoEnchendo", "severity": "warning", "instance": "/var"},
                     "annotations": {"summary": "Disco /var deve encher em menos de 24h"},
                 },
+                # Alerta vindo de exportador compartilhado: o `instance` é o
+                # endereço do preview-operator, igual em todos os alertas que ele
+                # produz. Quem localiza o problema é o namespace.
+                {
+                    "status": "firing",
+                    "labels": {
+                        "alertname": "PreviewAmbienteExpirando",
+                        "severity": "warning",
+                        "instance": "10.42.0.17:8080",
+                        "namespace": "previews",
+                        "pull_request": "108",
+                    },
+                    "annotations": {"summary": "Ambiente de preview do PR #108 expira em breve"},
+                },
             ]
         }
         requisicao = urllib.request.Request(
@@ -106,11 +120,11 @@ def main() -> int:
             conferir(resposta.status == 204, "o webhook responde 204 ao Alertmanager", falhas)
 
         time.sleep(0.4)
-        conferir(len(recebidos) == 2, f"as duas notificações chegaram (chegaram {len(recebidos)})", falhas)
-        if len(recebidos) != 2:
+        conferir(len(recebidos) == 3, f"as três notificações chegaram (chegaram {len(recebidos)})", falhas)
+        if len(recebidos) != 3:
             return 1
 
-        disparando, resolvido = recebidos
+        disparando, resolvido, compartilhado = recebidos
         conferir(disparando["topico"] == "homelab-critico", "o tópico vem do caminho da URL", falhas)
 
         # Cabeçalho HTTP é latin-1; título em português não é. Sem RFC 2047 o
@@ -120,10 +134,20 @@ def main() -> int:
         conferir(disparando["prioridade"] == "urgent", "severidade critical vira prioridade urgent", falhas)
         conferir("runbook: https://exemplo/runbooks/no-notready.md" in disparando["corpo"],
                  "o runbook vai no corpo da notificação", falhas)
+        # Alerta de nó não tem namespace: aqui `instance` é o nó, e é o que deve
+        # aparecer.
         conferir("onde: nodo-1" in disparando["corpo"], "a instância aparece no corpo", falhas)
 
         conferir(resolvido["titulo"].startswith("RESOLVIDO:"), "alerta resolvido é marcado como tal", falhas)
         conferir(resolvido["prioridade"] == "low", "resolvido não vibra o telefone", falhas)
+
+        # E aqui o contrário: com namespace no alerta, o endereço de scrape do
+        # exportador não pode ganhar a linha. Ele é o mesmo em todos os alertas
+        # que aquele exportador produz, então não distingue um do outro.
+        conferir("onde: previews" in compartilhado["corpo"],
+                 "o namespace ganha do endereço do exportador", falhas)
+        conferir("10.42.0.17" not in compartilhado["corpo"],
+                 "o endereço de scrape não aparece quando há namespace", falhas)
 
         # 500 é o que faz o Alertmanager tentar de novo; 200 perderia o alerta
         # em silêncio, que é o pior desfecho para uma ponte de alerta.

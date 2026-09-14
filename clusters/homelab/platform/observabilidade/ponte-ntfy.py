@@ -48,6 +48,27 @@ def cabecalho(texto: str) -> str:
     return "=?UTF-8?B?" + base64.b64encode(texto.encode("utf-8")).decode("ascii") + "?="
 
 
+def localizar(rotulos: dict) -> str:
+    """Onde o problema está, e não de onde a métrica veio.
+
+    `instance` é o alvo que o Prometheus raspou. Para os alertas de nó é o
+    próprio nó, e é a resposta certa. Para tudo que sai de um exportador
+    compartilhado — preview-operator, cert-manager, Argo CD — é o endereço do
+    exportador, igual em todos os alertas dele, e a notificação chega com
+    `onde: 10.42.0.17:8080`. Às 3h isso não localiza nada, e ainda ocupa a linha
+    que localizaria.
+
+    Por isso o rótulo do objeto vem primeiro. `instance` fica como último
+    recurso, que é exatamente onde os alertas de nó o encontram: eles não têm
+    `namespace`.
+    """
+    namespace = rotulos.get("namespace")
+    pod = rotulos.get("pod")
+    if namespace and pod:
+        return f"{namespace}/{pod}"
+    return namespace or rotulos.get("instance") or ""
+
+
 def montar(alerta: dict) -> tuple[str, str, str, str]:
     rotulos = alerta.get("labels") or {}
     anotacoes = alerta.get("annotations") or {}
@@ -59,9 +80,9 @@ def montar(alerta: dict) -> tuple[str, str, str, str]:
     titulo = f"{'RESOLVIDO' if resolvido else 'DISPARANDO'}: {anotacoes.get('summary') or nome}"
 
     linhas = [anotacoes.get("description", "").strip()]
-    instancia = rotulos.get("instance") or rotulos.get("namespace")
-    if instancia:
-        linhas.append(f"onde: {instancia}")
+    onde = localizar(rotulos)
+    if onde:
+        linhas.append(f"onde: {onde}")
     # O runbook é o motivo de o alerta ser útil às 3h. Vai no corpo, não em
     # anexo, porque notificação de celular não abre anexo.
     if anotacoes.get("runbook_url"):
