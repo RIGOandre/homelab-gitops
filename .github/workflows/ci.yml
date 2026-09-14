@@ -133,6 +133,27 @@ jobs:
       - name: versões de chart existem
         run: python3 hack/conferir-versoes-de-chart.py
 
+  values-de-chart:
+    name: values de chart
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: azure/setup-helm@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - run: pip install --disable-pip-version-check pyyaml==6.0.2
+
+      # O único job que olha para dentro do chart. Chave de values escrita errado
+      # é ignorada em silêncio pelo Helm: o Argo CD fica Synced, o pod fica
+      # Running e o componente serve a configuração padrão. Sem este job, o
+      # sintoma é um alerta que nunca chega.
+      - name: os values existem no chart
+        run: python3 hack/conferir-values.py
+
   configmaps:
     runs-on: ubuntu-latest
     steps:

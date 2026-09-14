@@ -20,7 +20,8 @@ NS_ARGOCD     := argocd
 
 .PHONY: ajuda validar validar-terraform validar-manifestos validar-scripts \
         validar-segredos validar-configmaps testar-ponte conferir-versoes \
-        conferir-imagens configmaps plano aplicar bootstrap senha-argocd cifrar decifrar
+        conferir-imagens conferir-values configmaps plano aplicar bootstrap \
+        senha-argocd cifrar decifrar
 
 ajuda: ## Lista os alvos
 	@grep -hE '^[a-z][a-z-]*:.*##' $(MAKEFILE_LIST) \
@@ -62,13 +63,20 @@ configmaps: ## Regera os ConfigMap a partir dos .json e do .py
 testar-ponte: ## Sobe a ponte e um ntfy falso e confere a tradução
 	@python3 hack/testar-ponte-ntfy.py
 
-# Estes dois precisam de rede aberta e por isso não entram no `validar`: quem
+# Estes três precisam de rede aberta e por isso não entram no `validar`: quem
 # roda na máquina de casa não deve levar CI vermelho por causa do provedor.
 conferir-versoes: ## Confere que as versões de chart fixadas existem (precisa de rede)
 	@python3 hack/conferir-versoes-de-chart.py
 
 conferir-imagens: ## Confere que as tags de imagem existem (precisa de rede)
 	@./hack/conferir-imagens.sh
+
+# Chave de values que o chart não conhece é ignorada sem erro: o componente sobe
+# verde com a configuração padrão e o defeito só aparece quando se precisa dele.
+# Nenhuma validação de YAML pega isso, porque o arquivo está certo - errada está
+# a expectativa sobre o que o chart faz com ele.
+conferir-values: ## Renderiza cada chart e confere as chaves de values (precisa de rede)
+	@python3 hack/conferir-values.py
 
 # --------------------------------------------------------------------------
 # Infraestrutura
